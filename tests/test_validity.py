@@ -46,3 +46,15 @@ def test_heavy_dropout_still_works():
         assert not check_rules(
             circuit, qubits, N, n, cal["cz_pauli_error_rate"], cal["sq_pauli_error_rate"]
         )
+
+
+@pytest.mark.parametrize("N,n", [(N, n) for N in range(2, 11) for n in range(1, N // 2 + 1)])
+def test_bonus_entry_exact_and_routed(N, n):
+    from main import create_dicke_state_adaptive
+    from validity import noiseless_fidelity
+    import cirq_google
+
+    circuit, qubits = create_dicke_state_adaptive(N, n)
+    cirq_google.Willow105.validate_circuit(circuit)
+    assert len(qubits) == N
+    assert abs(noiseless_fidelity(circuit, qubits, n) - 1) < 1e-9

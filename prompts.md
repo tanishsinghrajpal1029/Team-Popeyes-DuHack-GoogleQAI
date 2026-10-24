@@ -185,3 +185,7 @@ Bärtschi–Eidenbenz, a 4-CZ block, ALAP, and uncertainty-aware placement, and 
 (6,1) 1.12, (6,3) 0.86, (8,2) 0.88, (8,4) 0.70 against "best possible" K/(K−1). The assistant
 compared on the same 1/E[z+x] metric: tie, ours +8%, theirs +7% (unverifiable), ours +11%.
 Our CZ counts are 15 vs 23 and 27 vs 49 where theirs are given.)
+
+(Bonus: the assistant added a non-adaptive `create_dicke_state_adaptive` that reuses the main
+constructions on a uniform calibration, packed for depth: score 23.8 by the corrected
+score_solution over 2 <= N <= 15.)

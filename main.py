@@ -829,3 +829,51 @@ def _build_core(
         if best is None or key < best[0]:
             best = (key, circuit, {swap_map[initial_map[q]] for q in lq})
     return best[1], best[2]
+
+
+# ---- bonus track ------------------------------------------------------------------------------
+
+
+def _uniform_calibration() -> dict:
+    """The bonus provides no error rates: every Willow105 qubit and coupler, equal rates."""
+    import cirq_google
+
+    qubits = sorted(cirq_google.Willow105.metadata.qubit_set)
+    pairs = [tuple(sorted(p)) for p in cirq_google.Willow105.metadata.qubit_pairs]
+    return dict(
+        cz_pauli_error_rate={p: (2.5e-3, 0.0) for p in pairs},
+        sq_pauli_error_rate={q: (4e-4, 0.0) for q in qubits},
+        zero_errors={q: (5e-3, 0.0) for q in qubits},
+        one_errors={q: (1e-2, 0.0) for q in qubits},
+    )
+
+
+def _pack(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Fewest moments: merge single-qubit runs, then re-insert every operation as early as
+    possible (single-qubit gates may share a moment with CZs; depth is all that is scored)."""
+    c = cirq.merge_single_qubit_gates_to_phxz(circuit)
+    c = cirq.drop_empty_moments(cirq.drop_negligible_operations(c))
+    return cirq.Circuit(c.all_operations())
+
+
+def create_dicke_state_adaptive(
+    num_qubits: int, num_excitations: int
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """Create a Cirq circuit that produces a Dicke state, allowing for adaptive circuits.
+
+    This entry is not adaptive yet: it returns our shallowest exact unitary construction
+    (allowed by the rules), built for a uniform calibration and packed for depth. Every
+    measurement branch is trivially exact because there are no measurements.
+
+    Args:
+        num_qubits: The number, N, of qubits in the Dicke state.
+        num_excitations: The number, n, of 1s in the state.
+
+    Returns:
+        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
+
+    Raises:
+        NotImplementedError: The requested (N, n) combination is not implemented.
+    """
+    circuit, qubits = build(num_qubits, num_excitations, **_uniform_calibration(), dd=False)
+    return _pack(circuit), qubits
