@@ -1,0 +1,8 @@
+# Willow105 is only in the cirq 1.8 dev builds (absent from 1.7.0 stable).
+# Install with: uv pip install --prerelease=allow -r requirements.txt
+cirq==1.8.0.dev20261023221525
+cirq-google==1.8.0.dev20261023221525
+numpy==2.5.4
+scipy==1.18.1
+matplotlib
+pytest
