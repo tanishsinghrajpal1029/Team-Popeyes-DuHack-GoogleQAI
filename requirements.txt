@@ -1,0 +1,11 @@
+# Quantum computing
+# cirq_google.Willow105 is not in the stable 1.7.0 release; it requires a
+# 1.8.0 dev build. Pinned to one build so the whole team gets the same code.
+cirq-core==1.8.0.dev20261023221525
+cirq-google==1.8.0.dev20261023221525
+
+# Numerics
+numpy
+
+# Jupyter kernel so the notebook can run inside this virtualenv
+ipykernel
