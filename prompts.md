@@ -262,3 +262,23 @@ were resolved as a union, keeping teammates' ipykernel. Tests passed, `main` was
 > D(8,4)
 > D(10,5)
 > and give the Case, Our score, Perfect circuit (median), Ours as % of perfect
+
+### Prompt 28 (plan mode)
+
+> /plan our score seems to drop off heavily on big N. we should think of ways to address
+> this issue while not sacrificing our current progress on small N. plan.
+
+Clarifying questions from the assistant, and Richard's answers:
+
+- *How far should "big N" go?* → "up to N = 15, we know the bonus is <= 15 bounded. so the
+  regular may be bounded to like 10-12 ish? if targeting 15 is bad then we can reduce to
+  around 12, then 10. depending on performance."
+- *Where should re-synthesis run?* → "This machine, overnight (Recommended)"
+
+### Prompt 29
+
+> switching to an a100 with 30 vcpu to run on vm. make a handoff.md and include the future
+> plan and next steps
+
+(The assistant wrote HANDOFF.md: VM setup, current state, the big-N diagnosis, plan P0–P6,
+commands, and gotchas.)
