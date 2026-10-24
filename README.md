@@ -62,6 +62,28 @@ seeds 0, 1, 2).
 - Readout: asymmetric per-qubit bit flips from `zero_errors` / `one_errors`, in both bases.
 - Not modeled: coherent gate errors, ZZ crosstalk, leakage, per-qubit T1 spread, drift.
 
+## Variational angle choice (experiments/vqe.py, branch richard-vqe)
+
+Hardware VQE does not apply here (no hardware at build time, exact state required); its
+classical half is `synth.py`. What remains is the freedom *inside* a synthesized structure:
+the same CZ pattern has many exact angle sets, and they respond differently to errors.
+
+- Gate (depolarizing) noise: all exact candidates are within 0.2% of each other.
+- Idle T1/T_phi (assumed parameters): up to 3x difference in imbalance lambda; matters for D⁶₂, D⁶₃.
+- Ry over-rotation (not in the noise model): first-order population error, lambda ~ 6-125
+  at 1% per-qubit, varying up to 5x between candidates. Every construction has it (B-E, W tree
+  included). Phase errors (CZ phase, stray Z) are second order for a real target: lambda < 0.04.
+- One CZ fewer than deployed: best infidelity 3e-3 or worse, so approximate circuits are
+  not an option even under the notebook's np.isclose check.
+
+```bash
+.venv/bin/python experiments/vqe.py spread --cases 4,2 5,2 6,2 6,3 --samples 24   # idle noise, seeds 0-2
+.venv/bin/python experiments/vqe.py coherent --cases 4,2 5,2 6,2 6,3              # over-rotation, phase errors
+.venv/bin/python experiments/vqe.py pick --cases 4,2 5,2 6,2 6,3                  # robust pick, held-out seeds
+.venv/bin/python experiments/vqe.py fragility --cases 4,1 6,1 8,1 4,2 5,2 6,2 6,3 7,3
+.venv/bin/python experiments/vqe.py gap --cases 4,2 5,2 6,2 6,3
+```
+
 ## Layout
 
 ```
@@ -73,6 +95,7 @@ experiments/validity.py challenge rules (stricter than Willow105.validate_circui
 experiments/evaluate.py simulate + score + CSV
 experiments/summarize.py seed-averaged, ceiling-normalized tables
 experiments/synth.py    offline exact synthesis of small Dicke circuits
+experiments/vqe.py      noise-aware choice among exact synthesized angle sets
 experiments/results/    every CSV behind the slides
 tests/                  pytest suite
 prompts.md              every AI prompt used (sponsor requirement)
