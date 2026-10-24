@@ -124,6 +124,32 @@ older copy of ours (4 ≤ N ≤ 8, so those rows are identical to ours), and **A
   - P1 (`bign/traj_*`) measures it against ours at N = 11–15 on those two k.
   - P3 can borrow its constant-depth W-tree scheduling.
 
+## 2c. VM session progress (Sat ~7:30 PM EDT)
+
+- **P0 done.** `tests/test_golden_small_n.py` + `tests/golden_small_n.json` (132 cases, from `e028b05`).
+- **P2 running**, started 6:20 PM.
+  - Command: `run_n910.log` (24 workers) and `run_d83.log` (2 workers).
+  - `synth.py` now checkpoints each job's best exact circuit to its JSON after every prune and
+    streams a per-job `.log`, so the jobs can be stopped at any time and `--export` still works.
+  - Early results:
+    - D8,3: 43 → 35 CZ and still pruning.
+    - Path brickworks for k ≥ 3 at N = 9–10 are exact at 108–113 CZ and are being pruned.
+    - Ladder shapes for D9,3 and D9,4 FAILED (not exact within 40 layers).
+- **P3 tried, negative.** `experiments/compress.py` works as specified:
+  - Bryan's no-DD circuit on the uniform calibration;
+  - complex U3 ansatz, gradient checked against finite differences;
+  - a ZYZ warm start that is exact (1e-15).
+  
+  But greedy single-CZ deletion from Bryan's D9,3 recovered exactness 0 times in 8 tries
+  (12 min, best residual 1.6e-4). The split construction is locally tight, so don't spend
+  CPU on P3; P2's brickwork-then-prune finds far smaller circuits.
+- **P1 running.** `experiments/trajectory.py` is the trajectory evaluator, with debiasing.
+  - Commands: `bign/p1_traj.log`, 4 workers, seed 0, 300 trajectories.
+  - It covers ours at N = 11–15 for n ∈ {1, 2, 3, ⌊N/4⌋, ⌊N/2⌋}, plus Tanish's at n ∈ {1, ⌊N/2⌋}.
+  - `bign/probe.csv` will hold an exact density-matrix D12,6 (seed 0) to cross-check the
+    trajectories. One N = 12 density-matrix case takes over 45 min, so use trajectories for
+    N ≥ 11.
+
 ## 3. Plan (in order)
 
 ### P0 — Freeze small N (do first, ~20 min)
