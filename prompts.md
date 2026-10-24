@@ -208,3 +208,15 @@ fake calibrations, 256 tests pass.)
 ### Prompt 22
 
 > what is the performance on absolute metrics currently
+
+### Prompt 23
+
+> performance compared to theoretical optimal so far?
+
+### Prompt 24
+
+> can you run and give results on these:
+> D(5,2)
+> D(6,3)
+> D(8,4)
+> D(10,5)
