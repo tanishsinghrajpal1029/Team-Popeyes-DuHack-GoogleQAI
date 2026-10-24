@@ -201,6 +201,138 @@ def _w_tree_circuit(root, rounds: list) -> cirq.Circuit:
     return sum(moments, cirq.Circuit())
 
 
+# ---- tiny W states (K <= 3): choose qubits by predicted expected score --------------------
+#
+# For K <= 3 the judged score 1/(z + x) is so heavy-tailed that its expectation is set by
+# the X-term floor x and the imbalance lambda, not by CZ count. With at most 3 qubits we can
+# afford to simulate every placement exactly (gate depolarizing + readout, from the
+# calibration dicts) and pick the one with the highest predicted E[score].
+
+_PAULIS = [np.array(m, dtype=complex) for m in ([[0, 1], [1, 0]], [[0, -1j], [1j, 0]], [[1, 0], [0, -1]])]
+
+
+def _embed(mats: dict, N: int) -> np.ndarray:
+    """Kronecker product placing 2x2 `mats[i]` on logical qubit i (qubit 0 most significant)."""
+    out = np.array([[1.0 + 0j]])
+    for i in range(N):
+        out = np.kron(out, mats.get(i, np.eye(2)))
+    return out
+
+
+def _tiny_program(N: int, rounds: list, flip: bool):
+    """Compile one tree shape on LineQubits once; return it plus a noisy-simulation program."""
+    lq = cirq.LineQubit.range(N)
+    logical = _w_tree_circuit(lq[rounds[0][0][0]], [[(lq[p], lq[c]) for p, c in r] for r in rounds])
+    if flip:
+        logical.append(cirq.X.on_each(*lq))
+    compiled = _to_cz_phxz(logical)
+    steps = []
+    for op in compiled.all_operations():
+        idx = tuple(q.x for q in op.qubits)
+        u = cirq.Circuit(op).unitary(qubit_order=lq)
+        if op.gate == cirq.CZ:
+            paulis = [_embed({idx[0]: a, idx[1]: b}, N) for a in [np.eye(2)] + _PAULIS
+                      for b in [np.eye(2)] + _PAULIS][1:]
+            steps.append((u, "cz", idx, paulis))
+        elif not _is_virtual_z(op):
+            steps.append((u, "sq", idx, [_embed({idx[0]: p}, N) for p in _PAULIS]))
+        else:
+            steps.append((u, None, idx, []))
+    return compiled, lq, steps
+
+
+def _expected_score(K: int, f: float, lam: float, x: float, exact: bool) -> float:
+    """E[1/(z + x)] with z = chi^2/(K f), chi^2 ~ noncentral chi^2(K-1, lam).
+
+    exact=False uses closed forms for lam = 0 (fast ranking); exact=True integrates."""
+    from scipy import integrate, special, stats
+
+    a = K * f * x  # E[score] = K f E[1/(chi^2 + a)]
+    if not exact:
+        if K == 2:
+            return K * f * math.sqrt(math.pi / (2 * a)) * special.erfcx(math.sqrt(a / 2))
+        return K * f * 0.5 * math.exp(a / 2) * special.exp1(a / 2)
+    dist = stats.ncx2(K - 1, lam) if lam > 1e-12 else stats.chi2(K - 1)
+    t_max = math.sqrt(dist.isf(1e-14))
+    val, _ = integrate.quad(lambda t: dist.pdf(t * t) * 2 * t / (t * t + a), 0, t_max,
+                            points=[min(math.sqrt(a), t_max / 2)], limit=500)
+    return K * f * val
+
+
+def _predict_tiny(steps, phys, n, cz_err, sq_err, zero_errors, one_errors, exact, shots=10_000):
+    N = len(phys)
+    rho = np.zeros((2**N, 2**N), dtype=complex)
+    rho[0, 0] = 1
+    for u, kind, idx, paulis in steps:
+        rho = u @ rho @ u.conj().T
+        if kind is None:
+            continue
+        p = cz_err[frozenset(phys[i] for i in idx)] if kind == "cz" else sq_err[phys[idx[0]]]
+        rho = (1 - p) * rho + (p / len(paulis)) * sum(P @ rho @ P for P in paulis)
+    h = _embed({i: np.array([[1, 1], [1, -1]]) / math.sqrt(2) for i in range(N)}, N)
+    probs = []
+    for r in (rho, h @ rho @ h):
+        pr = np.real(np.diag(r)).reshape((2,) * N)
+        for j, q in enumerate(phys):  # readout confusion, [read, true]
+            e0, e1 = zero_errors.get(q, (0.5, 0))[0], one_errors.get(q, (0.5, 0))[0]
+            conf = np.array([[1 - e0, e1], [e0, 1 - e1]])
+            pr = np.moveaxis(np.tensordot(conf, pr, axes=([1], [j])), 0, j)
+        probs.append(pr.reshape(-1))
+    pz, px = probs
+    weight = np.array([bin(i).count("1") for i in range(2**N)])
+    pv = pz[weight == n]
+    f = float(pv.sum())
+    lam = shots * f * float(np.mean((pv / pv.mean() - 1) ** 2))
+    qw = np.bincount(weight, weights=px, minlength=N + 1)
+    x = 0.0
+    for k in range(1, N + 1):  # mean X term, including its shot-noise floor
+        v = np.array([sum((-1) ** j * math.comb(w, j) * math.comb(N - w, k - j) for j in range(k + 1))
+                      for w in range(N + 1)]) / math.comb(N, k)
+        m = float(qw @ v)
+        var = float(qw @ v**2) - m * m
+        ideal = (math.comb(k, k // 2) * math.comb(N - k, n - k // 2) / math.comb(N, n)
+                 if k % 2 == 0 and 0 <= n - k // 2 <= N - k else 0.0)
+        x += ((m - ideal) ** 2 + var / shots) / (ideal**2 if ideal else 1.0)
+    return _expected_score(math.comb(N, n), f, lam, x, exact)
+
+
+def _tiny_candidates(g: nx.Graph, N: int):
+    """(logical rounds, physical qubits by logical index) for every placement of N <= 3."""
+    if N == 2:
+        for a, b in g.edges:
+            yield [[(0, 1)]], [a, b]
+            yield [[(0, 1)]], [b, a]
+        return
+    for mid in g.nodes:  # N == 3: every path a - mid - c
+        nbrs = sorted(g.neighbors(mid))
+        for i, a in enumerate(nbrs):
+            for c in nbrs[i + 1:]:
+                yield [[(0, 1)], [(0, 2)]], [mid, a, c]  # star from the middle, either order
+                yield [[(0, 1)], [(0, 2)]], [mid, c, a]
+                yield [[(0, 1)], [(1, 2)]], [a, mid, c]  # chain from either end
+                yield [[(0, 1)], [(1, 2)]], [c, mid, a]
+
+
+def _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors):
+    cz_err = {frozenset(p): v[0] for p, v in cz_pauli_error_rate.items()}
+    sq_err = {q: v[0] for q, v in sq_pauli_error_rate.items()}
+    programs, scored = {}, []
+    for rounds, phys in _tiny_candidates(g, N):
+        key = str(rounds)
+        if key not in programs:
+            programs[key] = _tiny_program(N, rounds, flip)
+        e = _predict_tiny(programs[key][2], phys, n, cz_err, sq_err, zero_errors, one_errors, exact=False)
+        scored.append((e, key, phys))
+    if not scored:
+        return None
+    scored.sort(key=lambda t: -t[0])
+    best = max(scored[:10], key=lambda t: _predict_tiny(
+        programs[t[1]][2], t[2], n, cz_err, sq_err, zero_errors, one_errors, exact=True))
+    compiled, lq, _ = programs[best[1]]
+    mapping = dict(zip(lq, best[2]))
+    return compiled.transform_qubits(lambda q: mapping[q]), set(best[2])
+
+
 # ---- Baertschi-Eidenbenz logical circuit ------------------------------------------------
 
 
@@ -574,19 +706,19 @@ def create_dicke_state(
 def build(
     num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
     zero_errors, one_errors, *, w_tree: bool = True, synth: bool = True,
-    scs: bool = True, dd: bool = True,
+    scs: bool = True, tiny: bool = True, dd: bool = True,
 ) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
     """`create_dicke_state` with switches for the experiments (defaults = submission)."""
     circuit, qubits = _build_core(
         num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
-        zero_errors, one_errors, w_tree=w_tree, synth=synth, scs=scs,
+        zero_errors, one_errors, w_tree=w_tree, synth=synth, scs=scs, tiny=tiny,
     )
     return (_add_dd(circuit) if dd else circuit), qubits
 
 
 def _build_core(
     num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
-    zero_errors, one_errors, *, w_tree: bool, synth: bool, scs: bool,
+    zero_errors, one_errors, *, w_tree: bool, synth: bool, scs: bool, tiny: bool,
 ) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
     N, n = int(num_qubits), int(num_excitations)
     if N < 1 or not 0 <= n <= N:
@@ -606,6 +738,14 @@ def _build_core(
         return cirq.Circuit(ops), set(qubits)
 
     g = _usable_graph(cz_pauli_error_rate, sq_pauli_error_rate)
+
+    # Measured (experiments/results/tiny.csv): for W2 this raises E[score] 60.2 -> 65.6 while
+    # the median dips 4.37 -> 4.16; for W3 it gains nothing, so only N = 2 uses it.
+    if k == 1 and w_tree and tiny and N == 2:
+        picked = _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate,
+                              zero_errors, one_errors)
+        if picked is not None:
+            return picked
 
     if k == 1 and w_tree:
         tree_cost = {  # a tree node receives ~4 non-virtual single-qubit gates

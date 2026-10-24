@@ -172,3 +172,6 @@ CPU- and optimizer-bound, not FLOP-bound.)
 (The assistant pushed `richard`, added ARCHITECTURE.md, and replaced the resampled mean with
 a semi-analytic expected score E[1/(z+x)] as the reported objective: median and % of
 ceiling are diagnostics; the judges' total is a sum of single draws.)
+
+(Following the metric change, the assistant added a build-time selector that picks the W2
+qubit pair by predicted E[score]: +9% expected score, -5% median; kept for N = 2 only.)
