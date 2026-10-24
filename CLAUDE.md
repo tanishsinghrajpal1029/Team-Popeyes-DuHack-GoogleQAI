@@ -119,6 +119,16 @@ is scaffolding, tooling, and explanation.
    - Follow-up reference: Bärtschi & Eidenbenz, "Short-Depth Circuits for Dicke State
      Preparation" (QCE 2022, arXiv:2207.09998) — divide-and-conquer; check whether it
      maps onto a 2D patch.
+   **Status (Sat Oct 24, afternoon; branch `richard`).** Implemented and measured
+   (fractions are of the perfect-state median ceiling, simulated):
+   - k = min(n, N−n) = 1: broadcast tree, 2N−3 CZ, 89–100% of ceiling for N ≤ 10.
+   - N ≤ 8, k ≥ 2: whole-state exact Ry+CZ synthesis (`experiments/synth.py`), e.g.
+     D⁶₃ goes from 80 to 15 CZ (48% → 85%). Angles are cached in `main.py` because
+     synthesis takes minutes; placement is decided at build time.
+   - k ≤ 4, larger N: B-E built from synthesized SCS blocks on a path
+     (`experiments/scs_synth.py`), with no routing.
+   - Otherwise routed B-E. DD (XY4) is applied only to long idle windows (Richard's call;
+     see `experiments/results/dd*.csv`).
 4. **Freeze late Saturday.** Bonus only if main track is solid.
 5. **Sunday AM:** clean `main.py`, README, figures, slides, video, prompt log.
 

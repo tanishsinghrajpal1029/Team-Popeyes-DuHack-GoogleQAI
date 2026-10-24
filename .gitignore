@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 experiments/results/*.npz
 .ipynb_checkpoints/
+experiments/results/**/*.log
+experiments/results/*.log

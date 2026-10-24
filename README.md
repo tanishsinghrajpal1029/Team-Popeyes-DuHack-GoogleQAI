@@ -6,12 +6,19 @@ qubits and couplers) that prepares |D^N_n⟩ on Willow 105, and the set of qubit
 
 ## What it does
 
+Let k = min(n, N − n). `main.py` uses the first construction that applies, and for the
+two synthesized ones it picks whichever has fewer CZ:
+
 | case | construction | CZ count |
 |---|---|---|
-| n = 0 or n = N | product state (nothing, or X on all) | 0 |
-| n = 1 or n = N−1 | broadcast tree of amplitude splits (first split 1 CZ, then 2-CZ Givens) | 2N − 3 |
-| small N, 2 ≤ min(n, N−n) | exact Ry + CZ circuit found offline by numerical synthesis, placed at build time | e.g. D⁴₂: 5, D⁶₃: 15 |
-| everything else | Bärtschi–Eidenbenz, routed on a low-error path with `cirq.RouteCQC` | O(nN) |
+| k = 0 | product state (nothing, or X on all) | 0 |
+| k = 1 | broadcast tree of amplitude splits (first split 1 CZ, then 2-CZ Givens) | 2N − 3 |
+| N ≤ 8, k ≥ 2 | whole-state exact Ry + CZ circuit, synthesized offline, placed at build time | D⁴₂ 5, D⁶₃ 15, D⁷₃ 25, D⁸₄ 27 |
+| k ≤ 4, any N | Bärtschi–Eidenbenz built from synthesized nearest-neighbour SCS blocks on a path (no routing) | ≈ 4N (k=2), 12 per block (k=3), 17 per block (k=4) |
+| everything else | Bärtschi–Eidenbenz, routed on a low-error path with `cirq.RouteCQC` | O(nN) + routing |
+
+Dynamical decoupling (XY4) is added to idle windows with at least 4 free single-qubit
+slots on qubits that may be in superposition.
 
 For n > N/2 we prepare D^N_{N−n} and flip every qubit. The Dicke state is
 permutation-symmetric, so routing permutations never need undoing; we return wherever the
@@ -44,9 +51,15 @@ uv pip install --python .venv/bin/python --prerelease=allow -r requirements.txt 
 .venv/bin/python experiments/evaluate.py --out abl.csv --label chain --opt w_tree=false --only-w --nmax 10
 .venv/bin/python experiments/evaluate.py --out abl.csv --label B-E --opt synth=false --nmin 4 --nmax 6
 
-# regenerate the synthesized-circuit table embedded in main.py
-.venv/bin/python experiments/synth.py --cases 4,2 5,2 6,2 6,3 --shapes path ladder
+# regenerate the synthesized tables embedded in main.py (export_table re-verifies each entry)
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1   # parallel jobs: one BLAS thread each
+.venv/bin/python experiments/synth.py --cases 4,2 5,2 6,2 6,3 7,2 7,3 8,2 8,3 8,4 --shapes path ladder
 .venv/bin/python experiments/synth.py --export
+.venv/bin/python experiments/scs_synth.py --kmin 1 --kmax 4 --mmax 20
+.venv/bin/python experiments/scs_synth.py --export
+
+# slide figures
+.venv/bin/python experiments/figures.py
 ```
 
 Calibrations are the notebook's fake-data generators with fixed seeds (`experiments/calib.py`,
@@ -73,6 +86,8 @@ experiments/validity.py challenge rules (stricter than Willow105.validate_circui
 experiments/evaluate.py simulate + score + CSV
 experiments/summarize.py seed-averaged, ceiling-normalized tables
 experiments/synth.py    offline exact synthesis of small Dicke circuits
+experiments/scs_synth.py offline exact synthesis of B-E Split & Cyclic Shift blocks
+experiments/figures.py  every slide figure, from the CSVs
 experiments/results/    every CSV behind the slides
 tests/                  pytest suite
 prompts.md              every AI prompt used (sponsor requirement)

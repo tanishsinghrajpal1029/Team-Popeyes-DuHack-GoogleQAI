@@ -227,7 +227,9 @@ def export_table(main_path=os.path.join(os.path.dirname(HERE), "main.py")):
         m, k, all_ones = parts[0], parts[1], len(parts) == 3
         e = blocks[key]
         ins, outs = scs_io(m, k, all_ones)
-        err = np.abs(BatchCircuit(k + 1, e["cz_layers"]).apply(np.array(e["params"]), ins) - outs).max()
+        got = BatchCircuit(k + 1, e["cz_layers"]).apply(np.array(e["params"]), ins)
+        # one common sign for every input is a global phase of the whole state: allowed
+        err = min(np.abs(got - outs).max(), np.abs(got + outs).max())
         if err > 1e-6:
             print(f"skip SCS{key}: max amplitude error {err:.1e}")
             continue
