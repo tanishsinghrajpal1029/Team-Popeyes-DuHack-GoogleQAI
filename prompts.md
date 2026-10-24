@@ -100,3 +100,44 @@ cores would help only for extra synthesis seeds.)
 The assistant reported DD as neutral to slightly negative in simulation (short circuits;
 the simulator lacks ZZ crosstalk) and asked for the default. Richard's answer:
 "DD only on long idles (Recommended)".
+
+### Prompt 9
+
+> why are the 3 shells taking so long
+
+### Prompt 10
+
+> status?
+
+### Prompt 11
+
+> kill the ladder processes. eta on the 2nd job?
+
+### Prompt 12
+
+> is that most productive? check out the richard-vqe branch and see if its worth merging?
+
+### Prompt 13
+
+> that session is finished, you are good to commit it
+
+(The assistant committed session 2's uncommitted work on `richard-vqe` in its worktree and
+merged it into `richard`.)
+
+## Session 2 — Sat Oct 24, 2026, ~2:10 PM (branch `richard-vqe`)
+
+A second, parallel Claude Code session. Session 1 was still running jobs in the main
+checkout on `richard`, so this session works in a separate git worktree
+(`../Team-Popeyes-vqe`) on a new branch `richard-vqe` created from `richard`.
+
+### Prompt 1
+
+> see the current branch, and make a new richard-vqe branch. see if we can use VQE to be
+> useful in this case? something about reducing circuit depth and increasing accuracy
+
+### Prompt 2 (mid-task)
+
+> do u want gpu? i can connect a lambda cloud cluster
+
+(The assistant declined: every simulation here is at most 2^8 amplitudes, so the work is
+CPU- and optimizer-bound, not FLOP-bound.)
