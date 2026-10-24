@@ -204,3 +204,7 @@ it stays off; error+1σ placement is a no-op on uniform-uncertainty calibrations
 
 (Every placement decision now uses reported value + 1σ; 0 of 75 placements changed on the
 fake calibrations, 256 tests pass.)
+
+### Prompt 22
+
+> what is the performance on absolute metrics currently
