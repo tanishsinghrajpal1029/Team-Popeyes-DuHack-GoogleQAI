@@ -722,14 +722,27 @@ def create_dicke_state(
 def build(
     num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
     zero_errors, one_errors, *, w_tree: bool = True, synth: bool = True,
-    scs: bool = True, tiny: bool = True, dd: bool = True,
+    scs: bool = True, tiny: bool = True, alap: bool = False, dd: bool = True,
 ) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
     """`create_dicke_state` with switches for the experiments (defaults = submission)."""
     circuit, qubits = _build_core(
         num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
         zero_errors, one_errors, w_tree=w_tree, synth=synth, scs=scs, tiny=tiny,
     )
+    if alap:
+        circuit = _alap(circuit)
     return (_add_dd(circuit) if dd else circuit), qubits
+
+
+def _alap(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Schedule every operation as late as possible, so qubits stay in |0> (immune to
+    T1 and dephasing) until they are needed: pack the time-reversed circuit earliest-first,
+    then reverse it back. Order on each qubit is unchanged."""
+    rev = cirq.Circuit(op for m in reversed(circuit) for op in m)
+    c = cirq.Circuit(reversed(list(rev)))
+    if any(any(op.gate == cirq.CZ for op in m) and any(len(op.qubits) == 1 for op in m) for m in c):
+        c = cirq.stratified_circuit(c, categories=[lambda op: op.gate == cirq.CZ])
+    return c
 
 
 def _build_core(

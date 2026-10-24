@@ -189,3 +189,11 @@ Our CZ counts are 15 vs 23 and 27 vs 49 where theirs are given.)
 (Bonus: the assistant added a non-adaptive `create_dicke_state_adaptive` that reuses the main
 constructions on a uniform calibration, packed for depth: score 23.8 by the corrected
 score_solution over 2 <= N <= 15.)
+
+### Prompt 20
+
+> how much improvement is captured by borrowing best of both worlds
+
+(The assistant measured the borrowable pieces: the 7-CZ all-ones SCS block stays at 7 CZ
+over 8 synthesis seeds; ALAP scheduling changes E[score] by -1.4..+0.1% under idle noise, so
+it stays off; error+1σ placement is a no-op on uniform-uncertainty calibrations.)
