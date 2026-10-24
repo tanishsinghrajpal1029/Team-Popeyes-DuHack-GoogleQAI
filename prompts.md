@@ -236,3 +236,11 @@ fake calibrations, 256 tests pass.)
 (The assistant re-ran both solutions through this repo's harness, in vs_bryan.csv: the claims
 hold, with k = 2 going to bryan only for N ≥ 6. Bryan's bonus scores 35.3 vs our 23.8 under
 the corrected range.)
+
+Clarifying question from the assistant: how should the two solutions be combined? Richard's
+answer: "Portfolio in main.py (Recommended)".
+
+(The assistant vendored Bryan's dicke_solution.py into main.py with four renames, dispatched
+k = 2 with N >= 6 and k >= 3 with N >= 9 to it, and made the bonus return the shallower circuit.
+Portfolio: sum E[score] 102.0, sum of medians 27.9, bonus 37.2; hardening shows no over-moment
+cases left.)

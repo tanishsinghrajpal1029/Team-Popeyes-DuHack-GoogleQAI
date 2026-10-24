@@ -6,8 +6,10 @@ qubits and couplers) that prepares |D^N_n⟩ on Willow 105, and the set of qubit
 
 ## What it does
 
-Let k = min(n, N − n). `main.py` uses the first construction that applies, and for the
-two synthesized ones it picks whichever has fewer CZ:
+Let k = min(n, N − n). `main.py` first applies the measured portfolio rule: Bryan's
+solution for k = 2 with N ≥ 6 and for k ≥ 3 with N ≥ 9. Otherwise it uses the first of
+our constructions that applies, and for the two synthesized ones it picks whichever has
+fewer CZ:
 
 | case | construction | CZ count |
 |---|---|---|
@@ -15,7 +17,8 @@ two synthesized ones it picks whichever has fewer CZ:
 | k = 1 | broadcast tree of amplitude splits (first split 1 CZ, then 2-CZ Givens) | 2N − 3 |
 | N ≤ 8, k ≥ 2 | whole-state exact Ry + CZ circuit, synthesized offline, placed at build time | D⁴₂ 5, D⁶₃ 15, D⁷₃ 25, D⁸₄ 27 |
 | k ≤ 5, any N | Bärtschi–Eidenbenz built from synthesized nearest-neighbour SCS blocks on a path (no routing) | ≈ 4N (k=2); 12, 17, 29 per block (k=3, 4, 5) |
-| everything else | Bärtschi–Eidenbenz, routed on a low-error path with `cirq.RouteCQC` | O(nN) + routing |
+| k = 2 with N ≥ 6, or k ≥ 3 with N ≥ 9 | Bryan's solution (vendored from `origin/bryan`): B-E with custom blocks and a two-arm "split" B-E | D⁸₂ 23, D¹⁰₅ 85 |
+| everything else (fallback) | Bärtschi–Eidenbenz, routed on a low-error path with `cirq.RouteCQC` | O(nN) + routing |
 
 Dynamical decoupling (XY4) is added to idle windows with at least 4 free single-qubit
 slots on qubits that may be in superposition.

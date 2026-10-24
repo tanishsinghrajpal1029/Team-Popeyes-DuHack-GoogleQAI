@@ -50,6 +50,7 @@ expectation finite. A resampled mean there is dominated by a handful of lucky dr
 ```
 create_dicke_state(N, n, calibration)
  └─ build(..., w_tree, synth, scs, dd)                 defaults = the submission
+     ├─ k = 2 with N ≥ 6, or k ≥ 3 with N ≥ 9 → Bryan's solution (vendored), on failure fall through
      ├─ k = min(n, N−n); if n > N/2, prepare D_{N−n} and flip every qubit at the end
      ├─ k = 0  → product state (no gates, or X on all), best-readout qubits
      ├─ k = 1  → W broadcast tree
@@ -65,6 +66,16 @@ The Dicke state is permutation-symmetric, so we return wherever the logical qubi
 Routing permutations never need undoing.
 
 ### Constructions
+
+**Portfolio with Bryan's solution.** Bryan's branch (`origin/bryan`) is an independent
+solution. It generates candidates (W trees, Bärtschi–Eidenbenz on paths and ladders, and a
+two-arm "split" B-E that runs two half-size B-E circuits in parallel), places them, and
+keeps the one with the best predicted log-fidelity. Under our harness (`vs_bryan.csv`) it
+beats ours for k = 2 with N ≥ 6 (1–7%, about 3 fewer CZ) and for k ≥ 3 with N ≥ 9 (21–39%;
+D¹⁰₅ needs 85 CZ vs our 185). Ours win the W states, k = 2 up to N = 5, and k ≥ 3 up to
+N = 8 (by up to +28%). `main.py` vendors his file verbatim (four renames to avoid name
+clashes) and dispatches by that measured rule. The bonus entry returns the shallower of the
+two solutions per case.
 
 - **W tree (k = 1).**
   - Amplitude starts on a root. Each round, every qubit holding amplitude hands its
@@ -183,7 +194,13 @@ with a chain for W states.
 The D⁷/D⁸ rows predate their robust angle picks. Those picks change E[loss] by −2.1 to +0.6%
 with no over-rotation, on held-out calibrations, so the rows were not re-simulated.
 
-**Totals over these 25 cases:**
+**Portfolio (current `main.py`, `portfolio.csv`).** Σ E[score] **102.0** and Σ median **27.9**,
+vs 101.0 / 26.9 for our constructions alone and 100.5 / 27.2 for Bryan's alone. The per-case
+rows above are our constructions; for k = 2 with N ≥ 6 and k ≥ 3 with N ≥ 9 the deployed numbers
+are Bryan's (`vs_bryan.csv`). Bonus: 37.2, the shallower of the two per case (ours 23.8,
+Bryan's 35.3).
+
+**Totals over these 25 cases (our constructions only):**
 
 | | baseline | now | perfect state |
 |---|---|---|---|
@@ -196,16 +213,17 @@ with no over-rotation, on held-out calibrations, so the rows were not re-simulat
 
 **Hardening** (`experiments/harden.py`, 969 builds, plus `tests/test_robustness.py`):
 - Every N ≤ 12 with every n, on 6 calibrations (1–15% qubit dropout): all exact and valid.
-- No crashes anywhere. The worst build takes 17.6 s.
+- No crashes anywhere.
 - `NotImplementedError` only where the chip has no connected layout of size N (N ≥ 100 with
   dropouts).
-- Over 1,750 moments only for N ≥ 18 with k ≥ 4; those would score ≈ 0 anyway.
+- After the portfolio merge, nothing exceeds 1,750 moments (max 623 for N ≤ 30) and the worst
+  build takes 8.2 s.
 - Calibration dicts with reversed or duplicated pair keys, list or numpy values, missing
   readout entries, or couplers to uncalibrated qubits all work.
 
-**Bonus entry.** `create_dicke_state_adaptive` reuses the constructions on a uniform
-calibration, without DD, packed for depth. It is not adaptive yet. `score_solution` over
-2 ≤ N ≤ 15 gives 23.8.
+**Bonus entry.** `create_dicke_state_adaptive` returns the shallower of our constructions
+(uniform calibration, no DD, packed for depth) and Bryan's bonus solution. It is not adaptive
+yet. `score_solution` over 2 ≤ N ≤ 15 gives 37.2.
 
 **Known gaps, by expected value:**
 1. **W₂/W₃ X-term floor.** These cases still hold most of the remaining expected gap: 73.5 of
