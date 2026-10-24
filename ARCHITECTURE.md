@@ -104,6 +104,10 @@ Routing permutations never need undoing.
 
 ### Layout objective (all constructions)
 
+Every calibrated rate enters as **reported value + 1σ** (its stated uncertainty). This
+hedges against qubits that only look good by chance. It is a no-op on the notebook's
+uniform-uncertainty calibrations (0 of 75 placements changed).
+
 - CZ error × uses, plus single-qubit error × gate count.
 - Readout error weighted by how often each qubit reads 1.
 - Idle time × (1/T1 + 1/Tφ).
@@ -212,5 +216,5 @@ calibration, without DD, packed for depth. It is not adaptive yet. `score_soluti
    another model reports a 4-CZ equivalent, which would save 3 CZ in every k ≥ 3 SCS circuit.
 3. **Hardware gap.** Coherent errors, crosstalk, and the true T2* are unknown. For small K,
    1% over-rotation alone would cost about half the score. The hedges are the robust angle
-   picks (all synthesized cases) and long-idle DD. Placement does not yet account for the
-   calibration uncertainties (another model ranks error + 1σ).
+   picks (all synthesized cases) and long-idle DD. Placement ranks every rate at
+   value + 1σ, so qubits that only look good by chance are not preferred.

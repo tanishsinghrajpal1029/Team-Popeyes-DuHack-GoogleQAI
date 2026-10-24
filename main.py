@@ -26,22 +26,36 @@ _SECOND_TRY_BUDGET_S = 10.0
 # ---- calibration graph ----------------------------------------------------------------
 
 
+def _robust(v) -> float:
+    """Reported error rate plus one standard uncertainty, used for every placement decision.
+
+    Picking the lowest reported rates favours qubits that only look good by chance (their
+    true error regresses toward the median). Ranking by value + 1 sigma hedges that; with
+    the notebook's uniform uncertainties it shifts all costs equally and changes nothing.
+    Accepts (value, sigma) or a bare value.
+    """
+    try:
+        return float(v[0]) + max(float(v[1]), 0.0)
+    except (TypeError, IndexError):
+        return float(v)
+
+
 def _usable_graph(cz_pauli_error_rate: dict, sq_pauli_error_rate: dict) -> nx.Graph:
     """Calibrated couplers whose endpoints both have single-qubit calibrations."""
     g = nx.Graph()
-    for pair, (err, _) in cz_pauli_error_rate.items():
+    for pair, v in cz_pauli_error_rate.items():
         a, b = tuple(pair)  # keys are tuple(frozenset): order is arbitrary
         if a in sq_pauli_error_rate and b in sq_pauli_error_rate:
-            g.add_edge(a, b, err=err)
+            g.add_edge(a, b, err=_robust(v))
     return g
 
 
 def _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, p_one: float, n_sq: float = 1) -> float:
     """Expected per-qubit error: readout weighted by how often the qubit reads 1, plus
     `n_sq` single-qubit gates."""
-    e0 = zero_errors.get(q, (0.5, 0))[0]
-    e1 = one_errors.get(q, (0.5, 0))[0]
-    return (1 - p_one) * e0 + p_one * e1 + n_sq * sq_pauli_error_rate[q][0]
+    e0 = _robust(zero_errors.get(q, (0.5, 0)))
+    e1 = _robust(one_errors.get(q, (0.5, 0)))
+    return (1 - p_one) * e0 + p_one * e1 + n_sq * _robust(sq_pauli_error_rate[q])
 
 
 def _best_path(g: nx.Graph, length: int, node_cost: dict, beam: int = 256,
@@ -274,7 +288,7 @@ def _predict_tiny(steps, phys, n, cz_err, sq_err, zero_errors, one_errors, exact
     for r in (rho, h @ rho @ h):
         pr = np.real(np.diag(r)).reshape((2,) * N)
         for j, q in enumerate(phys):  # readout confusion, [read, true]
-            e0, e1 = zero_errors.get(q, (0.5, 0))[0], one_errors.get(q, (0.5, 0))[0]
+            e0, e1 = _robust(zero_errors.get(q, (0.5, 0))), _robust(one_errors.get(q, (0.5, 0)))
             conf = np.array([[1 - e0, e1], [e0, 1 - e1]])
             pr = np.moveaxis(np.tensordot(conf, pr, axes=([1], [j])), 0, j)
         probs.append(pr.reshape(-1))
@@ -314,8 +328,8 @@ def _tiny_candidates(g: nx.Graph, N: int):
 
 
 def _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors):
-    cz_err = {frozenset(p): v[0] for p, v in cz_pauli_error_rate.items()}
-    sq_err = {q: v[0] for q, v in sq_pauli_error_rate.items()}
+    cz_err = {frozenset(p): _robust(v) for p, v in cz_pauli_error_rate.items()}
+    sq_err = {q: _robust(v) for q, v in sq_pauli_error_rate.items()}
     programs, scored = {}, []
     for rounds, phys in _tiny_candidates(g, N):
         key = str(rounds)

@@ -197,3 +197,10 @@ score_solution over 2 <= N <= 15.)
 (The assistant measured the borrowable pieces: the 7-CZ all-ones SCS block stays at 7 CZ
 over 8 synthesis seeds; ALAP scheduling changes E[score] by -1.4..+0.1% under idle noise, so
 it stays off; error+1σ placement is a no-op on uniform-uncertainty calibrations.)
+
+### Prompt 21
+
+> yes add the 1σ hedge and push
+
+(Every placement decision now uses reported value + 1σ; 0 of 75 placements changed on the
+fake calibrations, 256 tests pass.)
