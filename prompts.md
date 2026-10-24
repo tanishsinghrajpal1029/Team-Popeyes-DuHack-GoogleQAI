@@ -253,3 +253,12 @@ cases left.)
 and .gitignore against teammates' origin/main commits; both pin the same cirq dev build, so they
 were resolved as a union, keeping teammates' ipykernel. Tests passed, `main` was pushed, and
 `richard` was fast-forwarded to it.)
+
+### Prompt 27
+
+> rerun the evals on the bryan + richard model for
+> D(5,2)
+> D(6,3)
+> D(8,4)
+> D(10,5)
+> and give the Case, Our score, Perfect circuit (median), Ours as % of perfect
