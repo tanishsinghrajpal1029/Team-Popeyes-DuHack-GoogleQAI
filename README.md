@@ -14,7 +14,7 @@ two synthesized ones it picks whichever has fewer CZ:
 | k = 0 | product state (nothing, or X on all) | 0 |
 | k = 1 | broadcast tree of amplitude splits (first split 1 CZ, then 2-CZ Givens) | 2N − 3 |
 | N ≤ 8, k ≥ 2 | whole-state exact Ry + CZ circuit, synthesized offline, placed at build time | D⁴₂ 5, D⁶₃ 15, D⁷₃ 25, D⁸₄ 27 |
-| k ≤ 4, any N | Bärtschi–Eidenbenz built from synthesized nearest-neighbour SCS blocks on a path (no routing) | ≈ 4N (k=2), 12 per block (k=3), 17 per block (k=4) |
+| k ≤ 5, any N | Bärtschi–Eidenbenz built from synthesized nearest-neighbour SCS blocks on a path (no routing) | ≈ 4N (k=2); 12, 17, 29 per block (k=3, 4, 5) |
 | everything else | Bärtschi–Eidenbenz, routed on a low-error path with `cirq.RouteCQC` | O(nN) + routing |
 
 Dynamical decoupling (XY4) is added to idle windows with at least 4 free single-qubit

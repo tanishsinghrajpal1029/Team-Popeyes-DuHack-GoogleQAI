@@ -54,7 +54,8 @@ create_dicke_state(N, n, calibration)
      ├─ k = 0  → product state (no gates, or X on all), best-readout qubits
      ├─ k = 1  → W broadcast tree
      ├─ (N, k) synthesized and cheaper than SCS → whole-state exact circuit, placed on chip
-     ├─ k ≤ 4  → Bärtschi–Eidenbenz from synthesized SCS blocks on a path
+     ├─ N = 2  → W pair chosen by simulating every placement (predicted E[score])
+     ├─ k ≤ 5  → Bärtschi–Eidenbenz from synthesized SCS blocks on a path
      ├─ else   → Bärtschi–Eidenbenz, routed (RouteCQC) on a low-error path
      ├─ compile to cirq.CZ + PhasedXZGate; every moment is all-CZ or all-1q
      └─ dynamical decoupling: XY4 in idle windows with ≥ 4 free 1q slots
@@ -89,12 +90,12 @@ Routing permutations never need undoing.
     chosen on calibration seed 0 and checked on seeds 1–2.
   - Effect: sensitivity to 1% over-rotation drops 1.1–5.5× (D⁵₂: λ 50 → 9). The cost under our
     standard noise model is between −0.9 and +2.6 points of ceiling share.
-  - Status: deployed for N ≤ 6. Picks for N = 7–8 are being applied.
-- **SCS blocks (k ≤ 4;** `experiments/scs_synth.py`**).**
+  - Status: deployed for every synthesized case (N ≤ 8).
+- **SCS blocks (k ≤ 5;** `experiments/scs_synth.py`**).**
   - B-E's Split & Cyclic Shift block SCS_{m,k} acts on k+1 consecutive line qubits, and its
     input is always a sorted string. That makes each block a small isometry, which we
     synthesize exactly on a path, so the whole B-E circuit needs no routing.
-  - Cost per inner block: 2, 4, 12, 17 CZ for k = 1–4. D^N_2 costs about 4N CZ.
+  - Cost per inner block: 2, 4, 12, 17, 29 CZ for k = 1–5. D^N_2 costs about 4N CZ.
   - The CZ pattern is pruned once per k; the angles are re-fit for every m.
 - **Routed B-E (fallback).** The paper's gates, with the doubly-controlled Ry hand-decomposed
   into 4 CNOT + 4 Ry (cirq's generic decomposition needs 10 CZ). Placed on a beam-searched
@@ -149,7 +150,7 @@ with a chain for W states.
 
 | case | K | construction | CZ (base → now) | f | χ²/(K−1) | x | E[score] (base → now) | median | % of ceiling (base → now) |
 |---|---|---|---|---|---|---|---|---|---|
-| W2 | 2 | tree | 2 → 1 | 0.988 | 1.002 | 0.0007 | 54.26 → 60.24 | 4.368 | 96% → 101% |
+| W2 | 2 | tree, pair chosen by predicted E[score] | 2 → 1 | 0.990 | 1.041 | 0.0005 | 54.26 → 65.55 | 4.157 | 96% → 96% |
 | W3 | 3 | tree | 4 → 3 | 0.977 | 1.019 | 0.0013 | 7.45 → 7.97 | 2.052 | 92% → 97% |
 | W4 | 4 | tree | 6 → 5 | 0.966 | 1.013 | 0.0019 | 3.37 → 3.41 | 1.609 | 95% → 96% |
 | D4,2 | 6 | whole-state synth | 21 → 5 | 0.968 | 1.019 | 0.0058 | 1.55 → 1.85 | 1.300 | 84% → 95% |
@@ -173,28 +174,43 @@ with a chain for W states.
 | D10,2 | 45 | SCS blocks | 97 → 34 | 0.798 | 1.022 | 0.0653 | 0.38 → 0.79 | 0.769 | 36% → 74% |
 | D10,3 | 120 | SCS blocks | 171 → 81 | 0.667 | 1.167 | 0.3987 | 0.23 → 0.47 | 0.471 | 22% → 47% |
 | D10,4 | 210 | SCS blocks | 238 → 126 | 0.544 | 1.052 | 1.2592 | 0.17 → 0.31 | 0.314 | 17% → 31% |
-| D10,5 | 252 | routed B-E | 324 → 324 | 0.309 | 1.317 | 3.8825 | 0.12 → 0.12 | 0.123 | 12% → 12% |
+| D10,5 | 252 | SCS blocks (k=5) | 324 → 185 | 0.487 | 1.086 | 1.9975 | 0.12 → 0.24 | 0.237 | 12% → 24% |
 
-(W2's 101% is Monte Carlo noise in the median at the ceiling.)
+The D⁷/D⁸ rows predate their robust angle picks. Those picks change E[loss] by −2.1 to +0.6%
+with no over-rotation, on held-out calibrations, so the rows were not re-simulated.
 
 **Totals over these 25 cases:**
 
 | | baseline | now | perfect state |
 |---|---|---|---|
-| Σ E[score] (objective) | 82.8 | **94.3** | 218.7 |
-| … of which K ≥ 4 | 21.1 | **26.1** | 33.2 |
-| … of which K ≤ 3 (W₂, W₃) | 61.7 | **68.2** | 185.5 |
-| Σ median score | 22.2 | **27.0** | 33.1 |
+| Σ E[score] (objective) | 82.8 | **99.7** | 218.7 |
+| … of which K ≥ 4 | 21.1 | **26.2** | 33.2 |
+| … of which K ≤ 3 (W₂, W₃) | 61.7 | **73.5** | 185.5 |
+| Σ median score | 22.2 | **26.9** | 33.1 |
 
-## 5. Known gaps (by expected value)
+## 5. Robustness, bonus, and known gaps
 
-1. **The X-term floor for W₂ and W₃.** These cases hold most of the remaining expected gap:
-   68 of a possible 186. Choosing the W₂ pair by predicted E[score] instead of the
-   proxy cost would gain about +6 on average (+16 on one calibration, 0 on another).
-2. **Robust picks for N = 7–8.** They are computed for D⁷₂, D⁷₃, D⁸₂, and D⁸₄, cutting
-   over-rotation sensitivity 1.5–2.5×. D⁸₃ is still running.
-3. **D⁸₃ synthesis is stuck at 43 CZ** (D⁸₄ needs only 27), and **D¹⁰₅ has no SCS blocks yet**
-   (the k=5 synthesis is still running).
-4. **Hardware gap.** Coherent errors, crosstalk, and the true T2* are unknown. For small K,
-   1% over-rotation alone would cost roughly half the score. The hedges against this are the
-   robust picks and DD.
+**Hardening** (`experiments/harden.py`, 969 builds, plus `tests/test_robustness.py`):
+- Every N ≤ 12 with every n, on 6 calibrations (1–15% qubit dropout): all exact and valid.
+- No crashes anywhere. The worst build takes 17.6 s.
+- `NotImplementedError` only where the chip has no connected layout of size N (N ≥ 100 with
+  dropouts).
+- Over 1,750 moments only for N ≥ 18 with k ≥ 4; those would score ≈ 0 anyway.
+- Calibration dicts with reversed or duplicated pair keys, list or numpy values, missing
+  readout entries, or couplers to uncalibrated qubits all work.
+
+**Bonus entry.** `create_dicke_state_adaptive` reuses the constructions on a uniform
+calibration, without DD, packed for depth. It is not adaptive yet. `score_solution` over
+2 ≤ N ≤ 15 gives 23.8.
+
+**Known gaps, by expected value:**
+1. **W₂/W₃ X-term floor.** These cases still hold most of the remaining expected gap: 73.5 of
+   a possible 185.5. W₂ now picks its qubit pair by predicted E[score]: +9% expected, −5% median,
+   a deliberate trade toward the objective. For W₃ the same selector gained nothing, so it is
+   off there.
+2. **D⁸₃ synthesis is stuck at 43 CZ** (D⁸₄ needs 27). The k=2 all-ones SCS block costs 7 CZ;
+   another model reports a 4-CZ equivalent, which would save 3 CZ in every k ≥ 3 SCS circuit.
+3. **Hardware gap.** Coherent errors, crosstalk, and the true T2* are unknown. For small K,
+   1% over-rotation alone would cost about half the score. The hedges are the robust angle
+   picks (all synthesized cases) and long-idle DD. Placement does not yet account for the
+   calibration uncertainties (another model ranks error + 1σ).
