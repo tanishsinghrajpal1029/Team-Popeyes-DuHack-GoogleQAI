@@ -9,6 +9,7 @@ Writes experiments/results/harden.csv and prints every failure plus the worst bu
 and moment count.
 
   python experiments/harden.py --workers 6
+  python experiments/harden.py --workers 6 --sub tanish_submission.py --out harden_tanish.csv
 """
 
 import argparse
@@ -77,7 +78,13 @@ def main_cli():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--parts", default="ABC")
+    ap.add_argument("--sub", default=None, help="submission file to test instead of main.py")
+    ap.add_argument("--out", default="harden.csv", help="CSV file name under experiments/results/")
     args = ap.parse_args()
+    if args.sub:  # forked workers inherit the swapped module
+        global main
+        from compare import load
+        main = load("sub", args.sub)
     todo = [j for j in jobs() if j[0] in args.parts]
     rows = []
     with Pool(args.workers) as pool:
@@ -86,7 +93,7 @@ def main_cli():
             if r["status"] not in ("ok",):
                 print(f"[{r['part']}] N={r['N']} n={r['n']} seed={r['seed']} dropout={r['dropout']}: "
                       f"{r['status']} {r.get('detail', '')}", flush=True)
-    append_rows(os.path.join(HERE, "results", "harden.csv"), rows)
+    append_rows(os.path.join(HERE, "results", args.out), rows)
     by = {}
     for r in rows:
         by[r["status"]] = by.get(r["status"], 0) + 1

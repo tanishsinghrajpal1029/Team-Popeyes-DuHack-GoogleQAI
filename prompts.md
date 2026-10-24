@@ -282,3 +282,11 @@ Clarifying questions from the assistant, and Richard's answers:
 
 (The assistant wrote HANDOFF.md: VM setup, current state, the big-N diagnosis, plan P0–P6,
 commands, and gotchas.)
+
+### Prompt 30
+
+> can you run bechmarks comparing the performance of @tanish_submission.py and @main.py
+
+(The assistant added `experiments/compare.py`, which scores any number of submission files
+through `evaluate.evaluate_case` in parallel, and `--sub`/`--out` options on
+`experiments/harden.py`. Results: `vs_tanish.csv`, `harden_tanish.csv`.)
