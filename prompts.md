@@ -220,3 +220,19 @@ fake calibrations, 256 tests pass.)
 > D(6,3)
 > D(8,4)
 > D(10,5)
+
+### Prompt 25 (pasted report from another session, plus a question)
+
+> bryans branch's eval returned:
+>
+> Both background jobs are still running: N=9–10 plus the detuning-noise run, and the bonus
+> scoring. I'll write up the full comparison when they finish. So far, on N ≤ 8 under
+> richard's noise model the two solutions are nearly tied overall (Σ E[score] 100.6 for bryan
+> vs 102.0 for richard). Richard wins clearly at k ≥ 3 for N ≤ 8, and bryan wins at k = 2 and
+> for everything larger.
+>
+> is this true and how should we optimize if it is?
+
+(The assistant re-ran both solutions through this repo's harness, in vs_bryan.csv: the claims
+hold, with k = 2 going to bryan only for N ≥ 6. Bryan's bonus scores 35.3 vs our 23.8 under
+the corrected range.)
