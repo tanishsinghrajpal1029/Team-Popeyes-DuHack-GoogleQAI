@@ -258,9 +258,27 @@ def export_table(main_path=os.path.join(os.path.dirname(HERE), "main.py")):
         key = (r["N"], r["k"])
         if key not in best or (r["cz"], r["cz_layers_count"]) < (best[key]["cz"], best[key]["cz_layers_count"]):
             best[key] = r
+    # Robust angle picks from experiments/vqe.py: same structure, a different exact solution
+    # that is less sensitive to coherent over-rotation. Used only if computed for exactly the
+    # structure and solution chosen above.
+    picks_path = os.path.join(HERE, "results", "vqe", "picks.json")
+    picks = json.load(open(picks_path)) if os.path.exists(picks_path) else {}
+    for (N, k), r in best.items():
+        p = picks.get(f"{N},{k}")
+        if p is None:
+            continue
+        same = ([[list(e) for e in l] for l in p["cz_layers"]] == [[list(e) for e in l] for l in r["cz_layers"]]
+                and np.allclose(p["deployed_params"], r["params"]))
+        circ = Circuit(N, r["cz_layers"])
+        infid = 1 - float(dicke_vector(N, k) @ circ.state(np.array(p["params"]))) ** 2
+        if same and infid < TOL:
+            r["params"], r["pick"] = p["params"], p["candidate"]
+        else:
+            print(f"ignore pick for D^{N}_{k}: {'structure/solution changed' if not same else f'infidelity {infid:.1e}'}")
     lines = [BEGIN, "_SYNTH = {\n"]
     for (N, k), r in sorted(best.items()):
-        lines.append(f"    ({N}, {k}): dict(  # {r['cz']} CZ, {r['shape']}, seed {r['seed']}\n")
+        note = f", robust pick {r['pick']}" if "pick" in r else ""
+        lines.append(f"    ({N}, {k}): dict(  # {r['cz']} CZ, {r['shape']}, seed {r['seed']}{note}\n")
         lines.append(f"        coords={[tuple(c) for c in r['coords']]!r},\n")
         lines.append(f"        cz_layers={[[tuple(e) for e in l] for l in r['cz_layers']]!r},\n")
         lines.append(f"        params={[float(p) for p in r['params']]!r},\n")

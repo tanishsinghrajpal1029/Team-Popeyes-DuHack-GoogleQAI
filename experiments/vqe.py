@@ -24,6 +24,8 @@ converge to different ones), and they behave differently under noise.
   python experiments/vqe.py pick --cases 4,2 5,2 6,2 6,3
   python experiments/vqe.py fragility --cases 4,1 6,1 8,1 4,2 5,2 6,2 6,3 7,3
   python experiments/vqe.py gap --cases 4,2 5,2 6,2 6,3
+  python experiments/vqe.py apply            # picks -> results/vqe/picks.json
+  python experiments/synth.py --export       # deploys the picks into main.py
 """
 
 import argparse
@@ -309,9 +311,38 @@ def run_gap(args):
     append_rows(os.path.join(HERE, "results", args.out), rows)
 
 
+def run_apply(args):
+    """Turn pick results into results/vqe/picks.json, which synth.py --export consumes.
+
+    Each entry keeps the deployed parameters (candidate 0) next to the pick, so the exporter
+    only substitutes a pick that was computed for the structure and solution it deploys.
+    """
+    import csv
+    picks_path = os.path.join(CANDS, "picks.json")
+    picks = {}
+    if os.path.exists(picks_path):
+        with open(picks_path) as fh:
+            picks = json.load(fh)
+    for name in args.pick_csvs:
+        with open(os.path.join(HERE, "results", name)) as fh:
+            chosen = {(int(r["N"]), int(r["k"])): int(r["pick"]) for r in csv.DictReader(fh)}
+        for (N, k), idx in sorted(chosen.items()):
+            with open(os.path.join(CANDS, f"D{N}_{k}_cands_s{args.seed}.json")) as fh:
+                fam = json.load(fh)
+            picks[f"{N},{k}"] = dict(cz_layers=fam["cz_layers"], candidate=idx,
+                                     deployed_params=fam["params"][0], params=fam["params"][idx])
+            print(f"D^{N}_{k}: candidate {idx}")
+    with open(picks_path, "w") as fh:
+        json.dump(picks, fh)
+    print(f"wrote {picks_path} ({len(picks)} cases); now run: python experiments/synth.py --export")
+
+
 def main_cli():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    apl = sub.add_parser("apply", help="write picks.json for synth.py --export")
+    apl.add_argument("--pick-csvs", nargs="+", default=["vqe_pick.csv"])
+    apl.add_argument("--seed", type=int, default=0)
     sp = sub.add_parser("spread")
     sp.add_argument("--samples", type=int, default=24, help="exact candidates per case, incl. deployed")
     sp.add_argument("--cal-seeds", type=int, nargs="+", default=[0, 1, 2])
@@ -343,6 +374,8 @@ def main_cli():
         p.add_argument("--cases", nargs="+", required=True, help="N,k pairs (spread, gap, coherent: must be in main._SYNTH)")
         p.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
+    if args.cmd == "apply":
+        return run_apply(args)
     args.cases = [tuple(int(v) for v in c.split(",")) for c in args.cases]
     if getattr(args, "pick", None):
         args.pick = {tuple(int(v) for v in p.split(",")[:2]): int(p.split(",")[2]) for p in args.pick}
