@@ -309,3 +309,13 @@ P2 synthesis runs for N = 9–10 and D8,3, and added the P0 golden test
 on fresh calibration seeds 3–5 (`vs_tanish_seeds345.csv`), added `experiments/mixed_moments.py`
 to test how much of the gain comes from mixed CZ + 1q moments, and recorded the findings and
 plan changes in HANDOFF.md §2b.)
+
+### Prompt 33 (on the VM)
+
+> combine the current best solution into an ipynb format for submission and commit it
+
+(The assistant added `experiments/make_notebook.py`, which fills the challenge notebook's two
+stub cells from `main.py` (the adaptive function into the bonus cell, everything else into the
+standard-track cell) and appends a check cell running the notebook's `test_circuit` and
+`Willow105.validate_circuit` on a few cases. Output: `submission.ipynb`; `--run` executes it
+top to bottom.)

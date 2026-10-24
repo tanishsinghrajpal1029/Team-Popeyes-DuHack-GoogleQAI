@@ -104,6 +104,7 @@ the same CZ pattern has many exact angle sets, and they respond differently to e
 
 ```
 main.py                 submission: create_dicke_state + helpers (cirq, cirq_google, numpy, networkx, stdlib)
+submission.ipynb        main.py inside the challenge notebook (regenerate: experiments/make_notebook.py --run)
 experiments/calib.py    notebook calibration generators (verbatim) + seeded wrapper
 experiments/noise.py    calibrated noise model, detuning copies, readout confusion
 experiments/scoring.py  judges' scorer (verbatim) + fast equivalent + score statistics + ceiling
