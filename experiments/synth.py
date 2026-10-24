@@ -179,7 +179,8 @@ def compact(cz_layers, params, N):
     return layers, np.array(rows).reshape(-1)
 
 
-def synthesize(N, k, shape, seed=0, max_layers=40, restarts=6, log=print):
+def synthesize(N, k, shape, seed=0, max_layers=40, restarts=6, log=print, save=None):
+    """`save(result_dict)`, if given, is called with every exact intermediate circuit."""
     rng = np.random.default_rng(seed)
     coords = shape_coords(shape, N)
     edges = shape_edges(coords)
@@ -196,6 +197,17 @@ def synthesize(N, k, shape, seed=0, max_layers=40, restarts=6, log=print):
     if found is None:
         return None
     layers, x = found
+
+    def result(layers, x, f):
+        return dict(
+            N=N, k=k, shape=shape, coords=coords, cz_layers=layers,
+            params=[float(v) for v in x], infidelity=float(f),
+            cz=sum(map(len, layers)), cz_layers_count=len(layers), seed=seed,
+            seconds=round(time.time() - t0, 1),
+        )
+
+    if save:
+        save(result(layers, x, 0.0))
     # 2. greedy CZ pruning (warm start + a few random restarts)
     improved = True
     while improved:
@@ -208,26 +220,34 @@ def synthesize(N, k, shape, seed=0, max_layers=40, restarts=6, log=print):
             if f < TOL:
                 layers, x = compact(trial, xt, N)
                 log(f"  [{N},{k},{shape}] pruned -> cz={sum(map(len, layers))}")
+                if save:
+                    save(result(layers, x, f))
                 improved = True
                 break
     # 3. polish
     f, x = optimize(Circuit(N, layers), dicke_vector(N, k), x, maxiter=20000)
-    return dict(
-        N=N, k=k, shape=shape, coords=coords, cz_layers=layers,
-        params=[float(v) for v in x], infidelity=float(f),
-        cz=sum(map(len, layers)), cz_layers_count=len(layers), seed=seed,
-        seconds=round(time.time() - t0, 1),
-    )
+    return result(layers, x, f)
 
 
 def _job(args):
     N, k, shape, seed = args
-    lines = []
-    res = synthesize(N, k, shape, seed=seed, log=lambda s: lines.append(s))
     os.makedirs(OUT, exist_ok=True)
+    stem = os.path.join(OUT, f"D{N}_{k}_{shape}_s{seed}")
+    lines = []
+
+    def log(s):
+        lines.append(s)
+        with open(stem + ".log", "a") as fh:
+            fh.write(f"{time.strftime('%H:%M:%S')} {s}\n")
+
+    def save(r):  # checkpoint: an exact circuit, overwritten as pruning improves it
+        with open(stem + ".json.tmp", "w") as fh:
+            json.dump(r, fh)
+        os.replace(stem + ".json.tmp", stem + ".json")
+
+    res = synthesize(N, k, shape, seed=seed, log=log, save=save)
     if res is not None:
-        with open(os.path.join(OUT, f"D{N}_{k}_{shape}_s{seed}.json"), "w") as fh:
-            json.dump(res, fh)
+        save(res)
     summary = f"D^{N}_{k} {shape} seed={seed}: " + (
         f"cz={res['cz']} layers={res['cz_layers_count']} infid={res['infidelity']:.1e} ({res['seconds']}s)"
         if res else "FAILED"

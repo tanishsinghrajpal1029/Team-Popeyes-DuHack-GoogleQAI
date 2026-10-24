@@ -290,3 +290,11 @@ commands, and gotchas.)
 (The assistant added `experiments/compare.py`, which scores any number of submission files
 through `evaluate.evaluate_case` in parallel, and `--sub`/`--out` options on
 `experiments/harden.py`. Results: `vs_tanish.csv`, `harden_tanish.csv`.)
+### Prompt 31 (on the 30-vCPU VM)
+
+> Look through @HANDOFF.md and complete the steps
+
+(The assistant set up the VM venv, added checkpointing and per-job progress logs to
+`experiments/synth.py` so long runs keep their best exact circuit if cut short, launched the
+P2 synthesis runs for N = 9–10 and D8,3, and added the P0 golden test
+`tests/test_golden_small_n.py` with `tests/golden_small_n.json` generated from `e028b05`.)
