@@ -2,8 +2,15 @@
 .ipynb_checkpoints/
 
 # Python
+.venv/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+
+# Experiment scratch
+experiments/results/*.npz
+experiments/results/*.log
+experiments/results/**/*.log
 
 # Local tooling
 graft/
