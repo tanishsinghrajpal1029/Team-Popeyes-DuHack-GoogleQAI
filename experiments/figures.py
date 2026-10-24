@@ -75,7 +75,8 @@ def score_tail():
     _save(fig, "score_tail.png")
 
 
-def _dumbbell(rows_before, rows_after, value, label_fmt, title, xlabel, name, log=False, cases=None):
+def _dumbbell(rows_before, rows_after, value, label_fmt, title, xlabel, name, log=False, cases=None,
+              legend=("before (chain / routed B-E)", "now (tree / synthesized)")):
     before = {(r["N"], r["n"]): r for r in rows_before}
     after = {(r["N"], r["n"]): r for r in rows_after}
     keys = [k for k in (cases or sorted(after)) if k in before and k in after]
@@ -96,8 +97,8 @@ def _dumbbell(rows_before, rows_after, value, label_fmt, title, xlabel, name, lo
         ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
     ax.set_xlabel(xlabel)
     ax.set_title(title)
-    ax.scatter([], [], s=64, color=BEFORE, label="before (chain / routed B-E)")
-    ax.scatter([], [], s=64, color=AFTER, label="now (tree / synthesized)")
+    ax.scatter([], [], s=64, color=BEFORE, label=legend[0])
+    ax.scatter([], [], s=64, color=AFTER, label=legend[1])
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2)
     _save(fig, name)
 
@@ -114,6 +115,19 @@ def ceiling_and_cz():
               "ceiling_fraction.png", cases=cases)
     _dumbbell(before, after, lambda r: r["cz"], lambda v: f"{v:.0f}",
               "CZ gates per circuit", "CZ count (log scale)", "cz_counts.png", log=True, cases=cases)
+
+    # mid-size general n: routed B-E vs whole-state synthesis (N <= 8) / SCS blocks (k <= 4)
+    before = [r for r in summarize(load(["mid_n_routed.csv"])) if r["n"] >= 2]
+    after = [r for r in summarize(load(["mid_n.csv"])) if r["n"] >= 2]
+    cases = [(7, 2), (7, 3), (8, 2), (8, 3), (8, 4), (9, 2), (9, 3), (9, 4), (10, 2), (10, 3), (10, 4)]
+    _dumbbell(before, after, lambda r: 100 * r["frac"], lambda v: f"{v:.0f}%",
+              "Mid-size cases: share of the perfect-state ceiling", "% of ceiling, simulated",
+              "ceiling_fraction_mid.png", cases=cases,
+              legend=("routed B-E", "synthesized (whole state N ≤ 8, SCS blocks beyond)"))
+    _dumbbell(before, after, lambda r: r["cz"], lambda v: f"{v:.0f}",
+              "Mid-size cases: CZ gates per circuit", "CZ count (log scale)",
+              "cz_counts_mid.png", log=True, cases=cases,
+              legend=("routed B-E", "synthesized (whole state N ≤ 8, SCS blocks beyond)"))
 
 
 def tree_vs_chain():
