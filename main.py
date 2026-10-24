@@ -30,11 +30,12 @@ def _usable_graph(cz_pauli_error_rate: dict, sq_pauli_error_rate: dict) -> nx.Gr
     return g
 
 
-def _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, p_one: float) -> float:
-    """Expected per-qubit error: readout weighted by how often the qubit reads 1."""
+def _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, p_one: float, n_sq: float = 1) -> float:
+    """Expected per-qubit error: readout weighted by how often the qubit reads 1, plus
+    `n_sq` single-qubit gates."""
     e0 = zero_errors.get(q, (0.5, 0))[0]
     e1 = one_errors.get(q, (0.5, 0))[0]
-    return (1 - p_one) * e0 + p_one * e1 + sq_pauli_error_rate[q][0]
+    return (1 - p_one) * e0 + p_one * e1 + n_sq * sq_pauli_error_rate[q][0]
 
 
 def _best_path(g: nx.Graph, length: int, node_cost: dict, beam: int = 256) -> list | None:
@@ -74,6 +75,121 @@ def _connected_patch(g: nx.Graph, size: int, node_cost: dict) -> list | None:
             frontier -= set(chosen)
         return chosen
     return None
+
+
+# ---- W state (n = 1): broadcast tree of amplitude splits ------------------------------
+
+# Idle-error model for layout decisions. The calibration data has no T1/T2, so we use
+# the Willow spec-sheet T1 (68 us) and an assumed T_phi (100 us). One tree round is
+# 2 CZ layers (42 ns) + 2 single-qubit layers (25 ns). A W state carries exactly one
+# excitation in every branch, so its idle loss per round is independent of N.
+_ROUND_NS = 2 * 42 + 2 * 25
+_IDLE_RATE_PER_NS = 1 / 68e3 + 1 / 100e3
+
+
+def _readout_lambda(qubits: list, zero_errors, one_errors, n: int, f: float) -> float:
+    """Chi^2 noncentrality from readout alone: a valid string x survives readout with
+    relative weight ~ exp(-sum_{i in x} (e1_i - e0_i)), so its spread over random
+    n-subsets is n (N-n)/(N-1) var(e1 - e0)."""
+    N = len(qubits)
+    if N < 2:
+        return 0.0
+    d = np.array([one_errors[q][0] - zero_errors[q][0] for q in qubits])
+    return 1e4 * f * n * (N - n) / (N - 1) * float(np.var(d))
+
+
+def _grow_tree(g: nx.Graph, root, N: int, node_cost: dict):
+    """Each round, every qubit holding amplitude may split it onto one fresh neighbour.
+    Greedy: take the cheapest (edge + new-qubit) splits first. Returns (rounds, cost)
+    where rounds is a list of [(parent, child), ...]."""
+    nodes, used, rounds, cost = [root], {root}, [], node_cost[root]
+    while len(nodes) < N:
+        candidates = sorted(
+            (2 * g.edges[p, c]["err"] + node_cost[c], p, c)
+            for p in nodes for c in g.neighbors(p) if c not in used
+        )
+        busy, splits = set(), []
+        for c_cost, p, c in candidates:
+            if p in busy or c in busy:
+                continue
+            splits.append((p, c))
+            busy |= {p, c}
+            used.add(c)
+            cost += c_cost
+            if len(nodes) + len(splits) == N:
+                break
+        if not splits:
+            return None, math.inf
+        nodes += [c for _, c in splits]
+        rounds.append(splits)
+    cost -= g.edges[rounds[0][0]]["err"] if rounds else 0  # the first split is 1 CZ
+    return rounds, cost
+
+
+def _cheap_connected_sets(g: nx.Graph, N: int, node_cost: dict, cz_per_edge: float, keep: int):
+    """Beam search over connected qubit sets; cost = node costs + cheapest attaching edge."""
+    beam = max(16, 4000 // N)
+    frontier = sorted(((node_cost[q], frozenset([q])) for q in g.nodes), key=lambda t: t[0])[:beam]
+    for _ in range(N - 1):
+        grown = {}
+        for cost, S in frontier:
+            for v in {u for s in S for u in g.neighbors(s)} - S:
+                e = min(g.edges[v, u]["err"] for u in g.neighbors(v) if u in S)
+                c2 = cost + node_cost[v] + cz_per_edge * e
+                S2 = S | {v}
+                if c2 < grown.get(S2, math.inf):
+                    grown[S2] = c2
+        if not grown:
+            return []
+        frontier = sorted(((c, S) for S, c in grown.items()), key=lambda t: t[0])[:beam]
+    return [S for _, S in frontier[:keep]]
+
+
+def _best_w_tree(g, N, node_cost, zero_errors, one_errors):
+    """Pick a cheap qubit set first, then the best broadcast tree inside it."""
+    best, best_cost = None, math.inf
+    for S in _cheap_connected_sets(g, N, node_cost, cz_per_edge=2, keep=8):
+        sub = g.subgraph(S)
+        roots = sorted(S, key=lambda q: max(nx.single_source_shortest_path_length(sub, q).values()))
+        for root in roots[:12]:
+            rounds, cost = _grow_tree(sub, root, N, node_cost)
+            if rounds is None:
+                continue
+            cost += len(rounds) * _ROUND_NS * _IDLE_RATE_PER_NS
+            lam = _readout_lambda(list(S), zero_errors, one_errors, 1, math.exp(-cost))
+            cost += math.log1p(lam / (N - 1))
+            if cost < best_cost:
+                best, best_cost = (root, rounds), cost
+    return best
+
+
+def _w_tree_circuit(root, rounds: list) -> cirq.Circuit:
+    """Amplitude starts on the root; a split hands a child the share of its subtree."""
+    children = {}
+    for r in rounds:
+        for p, c in r:
+            children.setdefault(p, []).append(c)
+
+    size = {}
+
+    def subtree(v):
+        size[v] = 1 + sum(subtree(c) for c in children.get(v, []))
+        return size[v]
+
+    remaining = {root: subtree(root)}  # amplitude^2 (in units of 1/N) still held by v
+    moments = []
+    for i, r in enumerate(rounds):
+        ops = []
+        for p, c in r:
+            theta = math.asin(math.sqrt(size[c] / remaining[p]))
+            remaining[p] -= size[c]
+            remaining[c] = size[c]
+            if i == 0:  # product input: Ry, CNOT, X gives cos|10> + sin|01> with 1 CZ
+                ops += [cirq.ry(2 * theta).on(c), cirq.CNOT(c, p), cirq.X(p)]
+            else:  # cirq.givens(-t): |10> -> cos t |10> + sin t |01>
+                ops.append(cirq.givens(-theta).on(p, c))
+        moments.append(cirq.Circuit(ops))
+    return sum(moments, cirq.Circuit())
 
 
 # ---- Baertschi-Eidenbenz logical circuit ------------------------------------------------
@@ -163,6 +279,17 @@ def create_dicke_state(
     Raises:
         NotImplementedError: The requested (N, n) combination is not implemented.
     """
+    return build(
+        num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+        zero_errors, one_errors,
+    )
+
+
+def build(
+    num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+    zero_errors, one_errors, *, w_tree: bool = True,
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """`create_dicke_state` with switches for the experiments (defaults = submission)."""
     N, n = int(num_qubits), int(num_excitations)
     if N < 1 or not 0 <= n <= N:
         raise NotImplementedError(f"invalid (N, n) = ({N}, {n})")
@@ -181,6 +308,21 @@ def create_dicke_state(
         return cirq.Circuit(ops), set(qubits)
 
     g = _usable_graph(cz_pauli_error_rate, sq_pauli_error_rate)
+
+    if k == 1 and w_tree:
+        tree_cost = {  # a tree node receives ~4 non-virtual single-qubit gates
+            q: _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N, n_sq=4)
+            for q in sq_pauli_error_rate
+        }
+        tree = _best_w_tree(g, N, tree_cost, zero_errors, one_errors)
+        if tree is not None:
+            root, rounds = tree
+            logical = _w_tree_circuit(root, rounds)
+            qubits = {root} | {c for r in rounds for _, c in r}
+            if flip:
+                logical.append(cirq.X.on_each(*sorted(qubits)))
+            return _to_cz_phxz(logical), qubits
+
     layout = _best_path(g, N, node_cost) or _connected_patch(g, N, node_cost)
     if layout is None:
         raise NotImplementedError("no connected layout of the requested size")

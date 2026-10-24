@@ -21,6 +21,7 @@ Example:
 
 import argparse
 import csv
+import functools
 import json
 import math
 import os
@@ -145,14 +146,19 @@ def main_cli():
     ap.add_argument("--seeds", type=int, nargs="+", default=list(BENCH_SEEDS))
     ap.add_argument("--noise", choices=NOISE_PRESETS, default="idle")
     ap.add_argument("--repeats", type=int, default=2000)
+    ap.add_argument("--opt", action="append", default=[], metavar="KEY=VALUE",
+                    help="keyword option for main.build, e.g. --opt w_tree=False")
     args = ap.parse_args()
-    label = args.label or git_rev()
+    opts = {k: json.loads(v.lower()) if v.lower() in ("true", "false") else json.loads(v)
+            for k, v in (o.split("=", 1) for o in args.opt)}
+    builder = functools.partial(main.build, **opts)
+    label = (args.label or git_rev()) + "".join(f" {k}={v}" for k, v in opts.items())
     cases = [(N, n) for N in range(args.nmin, args.nmax + 1)
              for n in ([1] if args.only_w else range(1, N // 2 + 1))]
     rows = []
     for N, n in cases:
         for seed in args.seeds:
-            r = evaluate_case(N, n, seed, args.noise, args.repeats, label=label)
+            r = evaluate_case(N, n, seed, args.noise, args.repeats, builder=builder, label=label)
             rows.append(r)
             print(f"N={N:2d} n={n:2d} seed={seed} cz={r['cz']:4d} moments={r['moments']:4d} "
                   f"f={r.get('f', float('nan')):.3f} d_rms={r.get('delta_rms', float('nan')):.4f} "

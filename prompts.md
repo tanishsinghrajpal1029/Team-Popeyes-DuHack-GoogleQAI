@@ -22,3 +22,16 @@ Clarifying questions from the assistant, and Richard's answers:
 
 The resulting plan was approved by Richard. Its key outputs: the score-tail analysis (now in
 CLAUDE.md, "How it is scored"), the revised priority order, and Steps 0–3.
+
+### Checkpoint 1 (after baseline numbers)
+
+The assistant presented the baseline table (W states near their ceiling except N=2;
+general n far from it, with X term ≈ Z term at D⁸₄) and asked what should come next.
+Richard's answer: "W tree, then general n (Recommended)".
+
+### Prompt 2 (mid-task)
+
+> make and switch to branch richard- dont push or commit anything onto main
+
+(The assistant moved its two earlier local commits onto `richard` and reset local `main` to
+`origin/main`. Nothing was pushed.)
