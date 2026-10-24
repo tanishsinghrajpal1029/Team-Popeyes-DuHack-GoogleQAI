@@ -88,7 +88,9 @@ def circuit_stats(circuit: cirq.Circuit) -> dict:
     )
 
 
-def evaluate_case(N: int, n: int, seed: int, noise: str, repeats: int, builder=None, label="main") -> dict:
+def evaluate_case(N: int, n: int, seed: int, noise: str, repeats: int, builder=None, label="main",
+                  distributions=None) -> dict:
+    """`distributions` defaults to `exact_distributions` (trajectory.py passes a sampler)."""
     cal = make_calibration(seed)
     builder = builder or main.create_dicke_state
     t0 = time.time()
@@ -100,7 +102,7 @@ def evaluate_case(N: int, n: int, seed: int, noise: str, repeats: int, builder=N
     if problems:
         row["problems"] = "; ".join(problems)[:300]
         return row
-    pz, px = exact_distributions(circuit, qubits, cal, **NOISE_PRESETS[noise], seed=seed)
+    pz, px = (distributions or exact_distributions)(circuit, qubits, cal, **NOISE_PRESETS[noise], seed=seed)
     for tag, M in (("Mall", N), ("M4", min(4, N))):
         met = distribution_metrics(pz, px, N, n, M)
         if tag == "Mall":
@@ -148,6 +150,7 @@ def main_cli():
     ap.add_argument("--nmin", type=int, default=2)
     ap.add_argument("--nmax", type=int, default=8)
     ap.add_argument("--only-w", action="store_true", help="only n = 1")
+    ap.add_argument("--ns", type=int, nargs="+", default=None, help="only these n (default: 1 .. N/2)")
     ap.add_argument("--seeds", type=int, nargs="+", default=list(BENCH_SEEDS))
     ap.add_argument("--noise", choices=NOISE_PRESETS, default="idle")
     ap.add_argument("--repeats", type=int, default=2000)
@@ -159,7 +162,8 @@ def main_cli():
     builder = functools.partial(main.build, **opts)
     label = (args.label or git_rev()) + "".join(f" {k}={v}" for k, v in opts.items())
     cases = [(N, n) for N in range(args.nmin, args.nmax + 1)
-             for n in ([1] if args.only_w else range(1, N // 2 + 1))]
+             for n in ([1] if args.only_w else range(1, N // 2 + 1))
+             if args.ns is None or n in args.ns]
     rows = []
     for N, n in cases:
         for seed in args.seeds:
