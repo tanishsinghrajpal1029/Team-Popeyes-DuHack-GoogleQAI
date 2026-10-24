@@ -298,3 +298,14 @@ through `evaluate.evaluate_case` in parallel, and `--sub`/`--out` options on
 `experiments/synth.py` so long runs keep their best exact circuit if cut short, launched the
 P2 synthesis runs for N = 9–10 and D8,3, and added the P0 golden test
 `tests/test_golden_small_n.py` with `tests/golden_small_n.json` generated from `e028b05`.)
+
+### Prompt 32 (mid-task, on the VM)
+
+> new changes have come in from upstream, mainly that a new file tanish_submission.py shows
+> slightly improved performance for higher n values. Pull upstream and validate if these
+> results are correct, and if they are, consider them in plans.
+
+(The assistant rebased onto `origin/richard`, reproduced `vs_tanish.csv`, re-ran the head-to-head
+on fresh calibration seeds 3–5 (`vs_tanish_seeds345.csv`), added `experiments/mixed_moments.py`
+to test how much of the gain comes from mixed CZ + 1q moments, and recorded the findings and
+plan changes in HANDOFF.md §2b.)

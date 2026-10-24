@@ -85,6 +85,45 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1   # ALWAYS for
 track is probably ~10–12. If N = 13–15 turns out poorly, fall back to 12, then 10. Run the
 heavy jobs on the VM overnight.
 
+## 2b. Tanish's submission, validated (VM session, Sat 7:30 PM)
+
+`tanish_submission.py` dispatches to three embedded builders: Tanish's own (N ≤ 3), an
+older copy of ours (4 ≤ N ≤ 8, so those rows are identical to ours), and **Aanha's**
+(N ≥ 9). All numbers below are N = 9–10 median scores.
+
+- **Reproducible and safe.**
+  - `bign/repro_tanish_s0.csv` matches `vs_tanish.csv` exactly.
+  - All circuits are exact and valid; hardening is 961/969 ok, the same 8 impossible refusals.
+  - Worst build time is 30 s (a fixed budget at N = 105), against our 8 s.
+- **Out of sample** (`vs_tanish_seeds345.csv`, calibration seeds 3–5), Aanha's builder wins
+  only where it won on the bench seeds:
+
+  | k | D9 | D10 |
+  |---|---|---|
+  | 1 | +1.0% | +3.0% |
+  | ⌊N/2⌋ | D9,4 +2.6% | D10,5 +2.0% |
+  | 2 | −15% | −16% |
+  | 3 | −3% | −8% |
+  | 4 at N = 10 | | −4% |
+
+  Whole-submission sum at N = 9–10: ours 6.356, Tanish 6.078. So "better at higher n" holds
+  for n = ⌊N/2⌋ only.
+- **Why.** Build stats for N = 9–15 (seed 0) show:
+  - k = 1: its W trees stay at 14 moments for all N (ours grow to 19–23).
+  - k = N/2: the CZ count is equal and it uses slightly fewer moments.
+  - 2 ≤ k < N/2: it uses 10–60% more CZ.
+
+  It also packs single-qubit gates into CZ moments (30 of 76 at D10,5). Our noise model makes
+  those free. Stratifying D10,5 (seed 0) gives 0.410 → 0.394, which still beats our 0.376, so
+  about half of that gain is this timing assumption (`bign/mixed_probe.csv`). **Open question
+  for Richard: do we trust mixed CZ + 1q moments on Willow?** Our `_alap` deliberately
+  stratifies.
+- **Plan impact.**
+  - P4: add Aanha's builder (`tanish_submission._load_aanha`) as a candidate for k = 1 and
+    k = ⌊N/2⌋ at N ≥ 9.
+  - P1 (`bign/traj_*`) measures it against ours at N = 11–15 on those two k.
+  - P3 can borrow its constant-depth W-tree scheduling.
+
 ## 3. Plan (in order)
 
 ### P0 — Freeze small N (do first, ~20 min)
