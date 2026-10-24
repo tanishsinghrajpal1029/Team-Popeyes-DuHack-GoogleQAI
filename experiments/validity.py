@@ -63,9 +63,12 @@ def check_rules(
     num_excitations: int,
     cz_pauli_error_rate: dict,
     sq_pauli_error_rate: dict,
-    fidelity_atol: float = 1e-9,
+    fidelity_atol: float | None = 1e-9,
 ) -> list[str]:
-    """Return a list of violated rules (empty if the circuit is valid)."""
+    """Return a list of violated rules (empty if the circuit is valid).
+
+    fidelity_atol=None skips the noiseless-fidelity check (exponential in the qubit count).
+    """
     problems = []
     pairs = {frozenset(p) for p in cz_pauli_error_rate}
     for op in circuit.all_operations():
@@ -92,7 +95,7 @@ def check_rules(
         cirq_google.Willow105.validate_circuit(circuit)
     except ValueError as e:
         problems.append(f"validate_circuit: {e}")
-    if not problems:
+    if not problems and fidelity_atol is not None:
         fid = noiseless_fidelity(circuit, qubits, num_excitations)
         if abs(fid - 1) > fidelity_atol:
             problems.append(f"noiseless fidelity {fid:.12f}")
