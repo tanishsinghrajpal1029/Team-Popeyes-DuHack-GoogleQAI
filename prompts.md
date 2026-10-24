@@ -244,3 +244,12 @@ answer: "Portfolio in main.py (Recommended)".
 k = 2 with N >= 6 and k >= 3 with N >= 9 to it, and made the bonus return the shallower circuit.
 Portfolio: sum E[score] 102.0, sum of medians 27.9, bonus 37.2; hardening shows no over-moment
 cases left.)
+
+### Prompt 26
+
+> merge to main
+
+(The assistant merged `richard` into `main`. The only conflicts were add/add in requirements.txt
+and .gitignore against teammates' origin/main commits; both pin the same cirq dev build, so they
+were resolved as a union, keeping teammates' ipykernel. Tests passed, `main` was pushed, and
+`richard` was fast-forwarded to it.)
