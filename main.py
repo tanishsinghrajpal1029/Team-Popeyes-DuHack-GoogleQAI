@@ -11,10 +11,16 @@ answer; we just return that set.
 """
 
 import math
+import time
 
 import cirq
 import networkx as nx
 import numpy as np
+
+
+# Only attempt the second routing variant if the first finished within this many seconds,
+# so the 60 s build limit holds with a wide margin on slower machines.
+_SECOND_TRY_BUDGET_S = 10.0
 
 
 # ---- calibration graph ----------------------------------------------------------------
@@ -94,7 +100,7 @@ def _readout_lambda(qubits: list, zero_errors, one_errors, n: int, f: float) -> 
     N = len(qubits)
     if N < 2:
         return 0.0
-    d = np.array([one_errors[q][0] - zero_errors[q][0] for q in qubits])
+    d = np.array([one_errors.get(q, (0.5, 0))[0] - zero_errors.get(q, (0.5, 0))[0] for q in qubits])
     return 1e4 * f * n * (N - n) / (N - 1) * float(np.var(d))
 
 
@@ -320,16 +326,61 @@ _SYNTH = {
 
 def _to_cz_phxz(circuit: cirq.Circuit) -> cirq.Circuit:
     """Compile to cirq.CZ + PhasedXZGate and drop global phases."""
+    # CZTargetGateset already merges single-qubit runs into PhasedXZ and drops negligible ops
     c = cirq.optimize_for_target_gateset(circuit, gateset=cirq.CZTargetGateset())
-    c = cirq.Circuit(
+    c = cirq.drop_empty_moments(cirq.Circuit(
         cirq.Moment(op for op in m if not isinstance(op.gate, cirq.GlobalPhaseGate)) for m in c
-    )
-    c = cirq.merge_single_qubit_gates_to_phxz(c)
-    return cirq.drop_empty_moments(cirq.drop_negligible_operations(c))
+    ))
+    # hardware-friendly layering: every moment is either all CZ or all single-qubit
+    if any(any(op.gate == cirq.CZ for op in m) and any(len(op.qubits) == 1 for op in m) for m in c):
+        c = cirq.stratified_circuit(c, categories=[lambda op: op.gate == cirq.CZ])
+    return c
 
 
-def _phxz(op: cirq.Operation) -> cirq.Operation:
-    return cirq.PhasedXZGate.from_matrix(cirq.unitary(op)).on(*op.qubits)
+# ---- dynamical decoupling --------------------------------------------------------------------
+
+_X = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0)
+_Y = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0.5)
+
+
+def _is_virtual_z(op: cirq.Operation) -> bool:
+    if not isinstance(op.gate, cirq.PhasedXZGate):
+        return False
+    x = op.gate.x_exponent % 2
+    return min(x, 2 - x) < 1e-9
+
+
+def _add_dd(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Echo idle windows of qubits that may be in superposition.
+
+    A qubit is protected from its first non-virtual single-qubit gate (before that it sits
+    in |0>, which dephasing cannot touch) to the end of the circuit, including the trailing
+    window before measurement. Pulses go only into single-qubit moments. Windows with >= 4
+    free slots get X-Y-X-Y, with 2-3 slots X-X; both multiply to identity up to a global
+    phase, so the noiseless state is unchanged.
+    """
+    moments = [list(m) for m in circuit]
+    one_q_layer = [all(len(op.qubits) == 1 for op in m) for m in circuit]
+    for q in sorted(circuit.all_qubits()):
+        busy = [any(q in op.qubits for op in m) for m in circuit]
+        active = [i for i, m in enumerate(circuit) for op in m
+                  if q in op.qubits and len(op.qubits) == 1 and not _is_virtual_z(op)]
+        if not active:
+            continue
+        i = active[0] + 1
+        while i < len(circuit):
+            if busy[i]:
+                i += 1
+                continue
+            j = i
+            while j < len(circuit) and not busy[j]:
+                j += 1
+            slots = [t for t in range(i, j) if one_q_layer[t]]
+            seq = [_X, _Y, _X, _Y] if len(slots) >= 4 else [_X, _X] if len(slots) >= 2 else []
+            for s, gate in enumerate(seq):  # evenly spaced over the window
+                moments[slots[round((s + 0.5) * len(slots) / len(seq) - 0.5)]].append(gate.on(q))
+            i = j
+    return cirq.Circuit(cirq.Moment(m) for m in moments)
 
 
 # ---- entry point ------------------------------------------------------------------------
@@ -369,9 +420,20 @@ def create_dicke_state(
 
 def build(
     num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
-    zero_errors, one_errors, *, w_tree: bool = True, synth: bool = True,
+    zero_errors, one_errors, *, w_tree: bool = True, synth: bool = True, dd: bool = False,
 ) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
     """`create_dicke_state` with switches for the experiments (defaults = submission)."""
+    circuit, qubits = _build_core(
+        num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+        zero_errors, one_errors, w_tree=w_tree, synth=synth,
+    )
+    return (_add_dd(circuit) if dd else circuit), qubits
+
+
+def _build_core(
+    num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+    zero_errors, one_errors, *, w_tree: bool, synth: bool,
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
     N, n = int(num_qubits), int(num_excitations)
     if N < 1 or not 0 <= n <= N:
         raise NotImplementedError(f"invalid (N, n) = ({N}, {n})")
@@ -421,12 +483,22 @@ def build(
     logical, lq = _bartschi_eidenbenz(N, k)
     if flip:
         logical.append(cirq.X.on_each(*lq))
-    logical = _to_cz_phxz(logical)
 
+    # Routing is chaotic: routing the raw CNOT/CRy circuit or a CZ-compiled one wins on
+    # different calibrations (by up to ~30% CZ). Try both while time allows; keep the
+    # one with fewer CZs. The raw variant goes first because it is the faster one.
     device = g.subgraph(layout).copy()
-    router = cirq.RouteCQC(device)
-    initial = cirq.HardCodedInitialMapper(dict(zip(lq, layout)))
-    routed, initial_map, swap_map = router.route_circuit(logical, initial_mapper=initial)
-    circuit = _to_cz_phxz(routed)
-    final_qubits = {swap_map[initial_map[q]] for q in lq}
-    return circuit, final_qubits
+    start = time.monotonic()
+    best = None
+    for precompile in (False, True):
+        if best is not None and time.monotonic() - start > _SECOND_TRY_BUDGET_S:
+            break
+        router = cirq.RouteCQC(device)
+        initial = cirq.HardCodedInitialMapper(dict(zip(lq, layout)))
+        source = _to_cz_phxz(logical) if precompile else logical
+        routed, initial_map, swap_map = router.route_circuit(source, initial_mapper=initial)
+        circuit = _to_cz_phxz(routed)
+        key = (sum(op.gate == cirq.CZ for op in circuit.all_operations()), len(circuit))
+        if best is None or key < best[0]:
+            best = (key, circuit, {swap_map[initial_map[q]] for q in lq})
+    return best[1], best[2]
