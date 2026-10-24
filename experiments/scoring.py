@@ -201,6 +201,31 @@ def fast_overall_score(
     return float(1 / (z + x))
 
 
+# ---- expected score (the actual objective) -----------------------------------------------------
+
+
+def expected_score(K: int, f: float, lam: float, x: float) -> float:
+    """E[1 / (z + x)] for one judged draw, integrating the chi^2 shot noise exactly.
+
+    z = chi^2 / (K f), with chi^2 ~ noncentral chi^2(K - 1, lam) (lam = population
+    imbalance, 0 for a perfect state). x is held at its mean; Jensen makes that a slight
+    underestimate. This is what the judges' total is the sum of, in expectation. It is
+    heavy-tailed for K <= 3, which is why resampled means are too noisy to use there.
+    Substituting c = t^2 removes the c^(-1/2) singularity of the chi^2_1 density.
+    """
+    from scipy import integrate, stats
+
+    if K <= 1:
+        return 1.0 / x if x > 0 else math.inf
+    dist = stats.ncx2(K - 1, lam) if lam > 1e-12 else stats.chi2(K - 1)
+    a = K * f
+    t_max = math.sqrt(dist.isf(1e-14))
+    peak = math.sqrt(a * x)  # width of the 1/(c/a + x) spike near c = 0, in t
+    val, _ = integrate.quad(lambda t: dist.pdf(t * t) * 2 * t / (t * t / a + x), 0, t_max,
+                            points=[min(peak, t_max / 2)], limit=500)
+    return val
+
+
 # ---- the perfect-state ceiling ---------------------------------------------------------------
 
 

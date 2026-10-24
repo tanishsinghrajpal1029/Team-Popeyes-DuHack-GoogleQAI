@@ -158,3 +158,17 @@ CPU- and optimizer-bound, not FLOP-bound.)
 > `for num_qubits in range(2, 16)`.
 > In `test_circuit`, `keep_indices = range(qubits)` should say
 > `keep_indices = range(len(qubits))`
+
+### Prompt 17
+
+> the expected value of the remaining 2 shells?
+
+### Prompt 18
+
+> sure. can we commit and push to the branch now and add a md that explains this
+> architecture and the performance metrics? are we using the proper performance metric?
+> then lets tackle those
+
+(The assistant pushed `richard`, added ARCHITECTURE.md, and replaced the resampled mean with
+a semi-analytic expected score E[1/(z+x)] as the reported objective: median and % of
+ceiling are diagnostics; the judges' total is a sum of single draws.)

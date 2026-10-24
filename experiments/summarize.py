@@ -2,8 +2,9 @@
 
 Columns: f (right-weight fraction), chi2/(K-1) (1 = shot noise only; the excess is
 population imbalance), x (X term, infinite shots), loss = mean of z + x over simulated
-runs (well-behaved, unlike the mean score), median score, the perfect-state median
-ceiling, and the fraction of that ceiling.
+runs, E[score] = expected single-draw score (the objective; semi-analytic, see
+scoring.expected_score), median score, the perfect-state median ceiling, and the
+fraction of that ceiling.
 
 Example:
   python experiments/summarize.py w_tree.csv baseline.csv --labels w-tree-v2 chain
@@ -19,7 +20,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from scoring import ceiling  # noqa: E402
+from scoring import ceiling, expected_score  # noqa: E402
 
 
 def load(paths, labels=None, noise=None):
@@ -44,7 +45,10 @@ def summarize(rows, tag="Mall"):
         loss = g(f"loss_mean_{tag}") if rs[0].get(f"loss_mean_{tag}") else g(f"z_mean_{tag}") + g(f"x_mean_{tag}")
         M = N if tag == "Mall" else min(4, N)
         ceil = ceiling(N, n, M)["score_median"]
+        x_mean = g(f"x_mean_{tag}")
         out.append(dict(label=label, noise=noise, N=N, n=n, K=K, cz=g("cz"), moments=g("moments"),
+                        expected=expected_score(K, g("f"), g("lam"), x_mean),
+                        ceiling_expected=expected_score(K, 1.0, 0.0, ceiling(N, n, M)["x_mean"]),
                         f=g("f"), chi2_ratio=chi2_ratio, x=g(f"x_inf_{tag}"), loss=loss,
                         median=g(f"score_median_{tag}"), ceiling=ceil,
                         frac=g(f"score_median_{tag}") / ceil, seeds=len(rs)))
@@ -60,11 +64,11 @@ def main_cli():
     args = ap.parse_args()
     rows = summarize(load(args.csvs, args.labels, args.noise), "M4" if args.M4 else "Mall")
     print(f"{'label':28s} {'noise':5s} {'(N,n)':7s} {'K':>4s} {'CZ':>5s} {'f':>6s} {'chi2/(K-1)':>10s} "
-          f"{'x':>7s} {'loss':>6s} {'median':>7s} {'ceiling':>7s} {'frac':>5s}")
+          f"{'x':>7s} {'loss':>6s} {'E[score]':>8s} {'median':>7s} {'ceiling':>7s} {'frac':>5s}")
     for r in rows:
         print(f"{r['label'][:28]:28s} {r['noise']:5s} ({r['N']},{r['n']}){'':{max(0, 4 - len(str(r['N'])) - len(str(r['n'])))}s} "
               f"{r['K']:4d} {r['cz']:5.0f} {r['f']:6.3f} {r['chi2_ratio']:10.3f} {r['x']:7.4f} "
-              f"{r['loss']:6.3f} {r['median']:7.3f} {r['ceiling']:7.3f} {100 * r['frac']:4.0f}%")
+              f"{r['loss']:6.3f} {r['expected']:8.3f} {r['median']:7.3f} {r['ceiling']:7.3f} {100 * r['frac']:4.0f}%")
 
 
 if __name__ == "__main__":
