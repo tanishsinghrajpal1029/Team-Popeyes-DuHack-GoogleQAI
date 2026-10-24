@@ -396,14 +396,21 @@ def _is_virtual_z(op: cirq.Operation) -> bool:
     return min(x, 2 - x) < 1e-9
 
 
+# Minimum free single-qubit slots in an idle window before we echo it (XY4 needs 4).
+# In simulation, echoing every short window cost up to ~1% of the ceiling share (pulse error
+# with nothing to refocus in sub-0.3 us idles); long windows are where hardware dephasing
+# and ZZ crosstalk accumulate, so only those are protected.
+_DD_MIN_SLOTS = 4
+
+
 def _add_dd(circuit: cirq.Circuit) -> cirq.Circuit:
-    """Echo idle windows of qubits that may be in superposition.
+    """Echo long idle windows of qubits that may be in superposition with X-Y-X-Y.
 
     A qubit is protected from its first non-virtual single-qubit gate (before that it sits
     in |0>, which dephasing cannot touch) to the end of the circuit, including the trailing
-    window before measurement. Pulses go only into single-qubit moments. Windows with >= 4
-    free slots get X-Y-X-Y, with 2-3 slots X-X; both multiply to identity up to a global
-    phase, so the noiseless state is unchanged.
+    window before measurement. Pulses go only into single-qubit moments, and only windows
+    with >= _DD_MIN_SLOTS free slots are echoed. XYXY = -I, so the noiseless state is
+    unchanged up to a global phase.
     """
     moments = [list(m) for m in circuit]
     one_q_layer = [all(len(op.qubits) == 1 for op in m) for m in circuit]
@@ -422,7 +429,7 @@ def _add_dd(circuit: cirq.Circuit) -> cirq.Circuit:
             while j < len(circuit) and not busy[j]:
                 j += 1
             slots = [t for t in range(i, j) if one_q_layer[t]]
-            seq = [_X, _Y, _X, _Y] if len(slots) >= 4 else [_X, _X] if len(slots) >= 2 else []
+            seq = [_X, _Y, _X, _Y] if len(slots) >= _DD_MIN_SLOTS else []
             for s, gate in enumerate(seq):  # evenly spaced over the window
                 moments[slots[round((s + 0.5) * len(slots) / len(seq) - 0.5)]].append(gate.on(q))
             i = j
@@ -467,7 +474,7 @@ def create_dicke_state(
 def build(
     num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
     zero_errors, one_errors, *, w_tree: bool = True, synth: bool = True,
-    scs: bool = True, dd: bool = False,
+    scs: bool = True, dd: bool = True,
 ) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
     """`create_dicke_state` with switches for the experiments (defaults = submission)."""
     circuit, qubits = _build_core(

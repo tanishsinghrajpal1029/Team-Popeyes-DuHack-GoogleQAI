@@ -79,3 +79,24 @@ and the tree was chosen for depth, not T1 balance. Full text of the paste:
 ### Prompt 5 (mid-task)
 
 > what noise model are we using
+
+### Prompt 6 (mid-task)
+
+> explain the current approach in the meantime
+
+### Prompt 7 (mid-task)
+
+> what are the current running agents doing
+
+### Prompt 8 (mid-task)
+
+> do u need gpu? i can boot up a lambda ai cluster
+
+(Answer: no; the workloads are tiny-statevector, latency-bound optimizations. More CPU
+cores would help only for extra synthesis seeds.)
+
+### Checkpoint: dynamical decoupling default
+
+The assistant reported DD as neutral to slightly negative in simulation (short circuits;
+the simulator lacks ZZ crosstalk) and asked for the default. Richard's answer:
+"DD only on long idles (Recommended)".

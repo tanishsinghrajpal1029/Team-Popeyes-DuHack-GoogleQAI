@@ -14,6 +14,7 @@ Noise presets:
   gate : calibrated depolarizing gate errors + readout errors
   idle : gate + T1 = 68 us (spec sheet) + T_phi = 100 us (assumed)
   full : idle + quasi-static detuning with T2* = 20 us (assumed), 16 samples
+  harsh: full with T2* = 5 us (a pessimistic bound, for the DD decision)
 
 Example:
   python experiments/evaluate.py --out baseline.csv --nmax 8 --noise idle
@@ -45,6 +46,7 @@ NOISE_PRESETS = {
     "gate": dict(t1_us=None, tphi_us=None, t2star_us=None),
     "idle": dict(t1_us=68.0, tphi_us=100.0, t2star_us=None),
     "full": dict(t1_us=68.0, tphi_us=100.0, t2star_us=20.0),
+    "harsh": dict(t1_us=68.0, tphi_us=100.0, t2star_us=5.0),  # stress test for DD
 }
 H_PHXZ = cirq.PhasedXZGate.from_matrix(cirq.unitary(cirq.H))
 
