@@ -141,3 +141,20 @@ checkout on `richard`, so this session works in a separate git worktree
 
 (The assistant declined: every simulation here is at most 2^8 amplitudes, so the work is
 CPU- and optimizer-bound, not FLOP-bound.)
+
+### Prompt 14
+
+> what is the new performance after the VQE-adjacent merge
+
+### Prompt 15
+
+> current eval score? 1/(x+z)? what dataset did we use for the testing? how does this
+> compare to the actual testing on hardware? what are the still running jobs?
+
+### Prompt 16 (relaying an organizer correction)
+
+> did you correct: I wanted to correct two typos:
+> In the bonus problem, the grading will be for 2 ≤ N ≤ 15, so score_solution should say
+> `for num_qubits in range(2, 16)`.
+> In `test_circuit`, `keep_indices = range(qubits)` should say
+> `keep_indices = range(len(qubits))`

@@ -139,9 +139,10 @@ layer, measured empirically.
 
 `create_dicke_state_adaptive(num_qubits, num_excitations)` may use mid-circuit
 measurement and classically conditioned gates. Scored on depth only: text says a point
-per (N,n) to the shallowest submission for 2 ≤ N ≤ 15, 1 ≤ n ≤ ⌊N/2⌋; the shown
-`score_solution` sums N·n/len(circuit) for N up to 20 (inconsistency — treat as
-"shallow for large N·n wins"). Must produce the exact state on every measurement
+per (N,n) to the shallowest submission for 2 ≤ N ≤ 15, 1 ≤ n ≤ ⌊N/2⌋; `score_solution`
+sums N·n/len(circuit). The organizers corrected its range to N ≤ 15 (`range(2, 16)`).
+Whether points go to the shallowest per case or come from the sum is still unstated; both
+reward "shallow for large N·n". Must produce the exact state on every measurement
 branch (no post-selection). Willow readout-line rule: measuring any qubit on an
 anti-diagonal (row + col = const) requires measuring all qubits on it — data qubits
 and measured ancillas must sit on disjoint anti-diagonals (not checked by
@@ -150,9 +151,13 @@ ancilla measurements + corrections. Expect log-ish depth, not constant.
 
 ## Known issues in the provided notebook
 
-- `test_circuit`: `keep_indices = range(qubits)` crashes (`qubits` is a set). Use
-  `range(len(qubits))`.
-- Bonus range mismatch (N ≤ 15 in text vs. 20 in code), noted above.
+Both were confirmed as typos by the organizers and are corrected in our copy of the notebook:
+
+- `test_circuit`: `keep_indices = range(qubits)` crashes (`qubits` is a set); it is
+  `range(len(qubits))`. Our harness copy (`experiments/validity.py`) uses the fix.
+- Bonus range: grading is for 2 ≤ N ≤ 15, so `score_solution` loops
+  `for num_qubits in range(2, 16)`. The scoring formula in the code (sum of N·n / len(circuit))
+  is unchanged by the correction.
 
 ## Repo layout
 
