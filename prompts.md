@@ -35,3 +35,47 @@ Richard's answer: "W tree, then general n (Recommended)".
 
 (The assistant moved its two earlier local commits onto `richard` and reset local `main` to
 `origin/main`. Nothing was pushed.)
+
+### Prompt 3 (mid-task)
+
+> what is the current overall score as the function of x and z? why is hardcoding necessary-
+> this is dynamically applicable? did we build our own noise simulator?
+
+### Prompt 4 (mid-task, pasted text, no other words)
+
+A pasted analysis (not written by the assistant) proposing ceiling-normalized reporting
+(median vs. K / median(χ²_{K−1})), using the median or mean loss z + x instead of the mean
+score, explicit f and χ²/(K−1) columns, and a chain-vs-tree test with time-dependent noise.
+The assistant adopted the reporting changes, ran the test, and corrected three factual
+points: the tree uses 2 CZ per split (2N−3 total), our idle preset already models T1/Tφ,
+and the tree was chosen for depth, not T1 balance. Full text of the paste:
+
+> These aren’t six competing models, they’re two architectures across six test cases, and the raw scores aren’t comparable across cases because each (N, n) has its own ceiling. The useful comparison is each case against the best score a perfect state could get, which is set by shot noise: with K = C(N,n) valid strings, chi² for a perfect state is a χ² random variable with K−1 degrees of freedom, so the median achievable score is roughly K / median(χ²_{K−1}).
+>
+> case    K    ceiling (median)    yours (median)    fraction of ceiling
+> W N=2 tree    2    4.4    4.37    ~99%
+> W N=4 tree    4    1.69    1.60    ~95%
+> W N=8 tree    8    1.26    1.15    ~91%
+> D⁴₂ B-E    6    1.38    1.16    ~84%
+> D⁶₃ B-E    20    1.09    0.53    ~49%
+> D⁸₄ B-E    70    1.02    0.24    ~24%
+>
+> Two things fall out. First, the tree W-state circuit is essentially perfect in this noise model: its z values (0.50, 0.79, 0.96) are exactly (1 − 1/K)/f with f ≈ 1.0, 0.95, 0.91, meaning there’s no detectable population imbalance and the only loss is leakage from gate errors. Second, the B-E circuits fall off a cliff as n grows, and the x column tells you why: at D⁶₃ and D⁸₄ the coherence is mostly gone (x of 0.45 and 1.77 against a ceiling near 0), and f has dropped to around 0.6 and 0.4. That’s the O(nN) gate count biting, plus the three-qubit blocks for n ≥ 2 being expensive to decompose into CZs. It’s a leakage-and-coherence problem, not an angle or symmetry problem, which points at CZ count, layout search, and DD as the levers rather than the construction’s logic.
+>
+> Ignore the mean column. For small K the score is 1/(small noisy number), and for K=2 the expected value of 1/χ²₁ is literally infinite, so 62.7 is an artifact of a few lucky seeds. Use the median, or better, average the loss z + x across seeds, which is well-behaved. Worth remembering, though, that the judges take a single 10k-shot draw, so for small cases your realized score is a lottery around that median regardless of what you do.
+>
+> The tree architecture
+>
+> The W state is one excitation shared equally across N qubits, and the tree builds it by repeated amplitude splitting outward from a root.
+>
+> Pick a spanning tree of your N chosen qubits on the grid, ideally balanced so every leaf is a similar number of hops from the root. Put the root in |1⟩, everything else in |0⟩. Now process the tree top-down. Each node holds a pending “weight” equal to the number of qubits in its subtree, which is how many qubits will eventually share the amplitude it currently holds. When a node with subtree size s hands off to a child with subtree size c, it applies the split primitive: a controlled-RY on the child with sin²(θ/2) = c/s, followed by a CNOT from child back to parent. That moves exactly the fraction c/s of the parent’s probability onto the child, and the parent’s remaining weight drops to s − c. Repeat for each child; after the last one the parent is left with exactly 1/N of the total. Every node does this to its children, so when the leaves are reached each qubit holds 1/N, all with positive sign because RY rotations never introduce a minus.
+>
+> Cost: N − 1 splits total, each 3 CZs (two for the CRY, one for the CNOT), so 3(N−1) CZs. Splits in different branches touch disjoint qubits and run in the same moments, so depth is about 3 × (number of children along the longest root-to-leaf path), roughly 3·log₂N for a balanced tree versus 3(N−1) for a chain. That’s why N=8 still holds 91% of ceiling.
+>
+> The thing to be careful about when presenting it: this simulator applies a fixed error probability per gate and knows nothing about time, so it cannot show the T1-timing imbalance that made us prefer a balanced tree over a chain in the first place. The tree’s z-at-floor result is evidence the angles and gate sequence are exact, not evidence that the timing argument holds on hardware. If you want that evidence, add a crude time-dependent decay to the noise model and rerun chain versus tree for N=8; the chain should start showing systematic chi² excess.
+>
+> One more thing for the results table: add columns for f and for chi²/(K−1) separately. Right now you’re reading leakage versus imbalance off z by inference; having them explicit will make the slides much easier to defend.
+
+### Prompt 5 (mid-task)
+
+> what noise model are we using

@@ -38,7 +38,7 @@ sys.path[:0] = [os.path.dirname(HERE), HERE]
 import main  # noqa: E402
 from calib import BENCH_SEEDS, make_calibration  # noqa: E402
 from noise import CalibratedNoise, apply_readout, detuned_copies, moment_duration_ns  # noqa: E402
-from scoring import distribution_metrics, score_distribution  # noqa: E402
+from scoring import ceiling, distribution_metrics, score_distribution  # noqa: E402
 from validity import check_rules  # noqa: E402
 
 NOISE_PRESETS = {
@@ -107,6 +107,9 @@ def evaluate_case(N: int, n: int, seed: int, noise: str, repeats: int, builder=N
         row[f"x_inf_{tag}"] = met["x_inf"]
         stats = score_distribution(pz, px, N, n, M, repeats=repeats, seed=seed)
         row.update({f"{k}_{tag}": v for k, v in stats.items()})
+        ceil = ceiling(N, n, M)
+        row[f"ceiling_median_{tag}"] = ceil["score_median"]
+        row[f"frac_ceiling_{tag}"] = stats["score_median"] / ceil["score_median"]
     return row
 
 
@@ -160,11 +163,12 @@ def main_cli():
         for seed in args.seeds:
             r = evaluate_case(N, n, seed, args.noise, args.repeats, builder=builder, label=label)
             rows.append(r)
+            nan = float("nan")
             print(f"N={N:2d} n={n:2d} seed={seed} cz={r['cz']:4d} moments={r['moments']:4d} "
-                  f"f={r.get('f', float('nan')):.3f} d_rms={r.get('delta_rms', float('nan')):.4f} "
-                  f"lam={r.get('lam', float('nan')):6.2f} x={r.get('x_inf_Mall', float('nan')):.4f} "
-                  f"score mean={r.get('score_mean_Mall', float('nan')):7.2f} "
-                  f"median={r.get('score_median_Mall', float('nan')):6.2f}", flush=True)
+                  f"f={r.get('f', nan):.3f} chi2/(K-1)={r.get('chi2_ratio_Mall', nan):.3f} "
+                  f"x={r.get('x_inf_Mall', nan):.4f} loss={r.get('loss_mean_Mall', nan):.3f} "
+                  f"median={r.get('score_median_Mall', nan):6.3f} "
+                  f"({100 * r.get('frac_ceiling_Mall', nan):.0f}% of ceiling)", flush=True)
     append_rows(os.path.join(HERE, "results", args.out), rows)
 
 

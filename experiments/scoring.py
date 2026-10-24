@@ -9,6 +9,7 @@ That makes it cheap to draw thousands of simulated 10k-shot runs from an exact
 distribution, which is what the heavy-tailed score needs (see CLAUDE.md).
 """
 
+import functools
 import itertools
 import math
 
@@ -200,6 +201,29 @@ def fast_overall_score(
     return float(1 / (z + x))
 
 
+# ---- the perfect-state ceiling ---------------------------------------------------------------
+
+
+def ideal_distributions(num_qubits: int, num_excitations: int) -> tuple[np.ndarray, np.ndarray]:
+    """Exact Z- and X-basis distributions of a perfect Dicke state."""
+    N = num_qubits
+    psi = np.zeros(2**N)
+    psi[popcounts(N) == num_excitations] = 1.0
+    psi /= np.linalg.norm(psi)
+    h = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
+    t = psi.reshape((2,) * N)
+    for j in range(N):
+        t = np.moveaxis(np.tensordot(h, t, axes=([1], [j])), 0, j)
+    return psi**2, t.reshape(-1) ** 2
+
+
+@functools.lru_cache(maxsize=None)
+def ceiling(num_qubits: int, num_excitations: int, max_k: int) -> dict:
+    """Score statistics of a perfect state: what shot noise alone allows."""
+    pz, px = ideal_distributions(num_qubits, num_excitations)
+    return score_distribution(pz, px, num_qubits, num_excitations, max_k, repeats=20000, seed=12345)
+
+
 # ---- score statistics from an exact output distribution ---------------------------------
 
 
@@ -248,11 +272,16 @@ def score_distribution(
     wcounts = rng.multinomial(n_shots, wx / wx.sum(), size=repeats) / n_shots
     x = x_term_from_weights(wcounts, n, max_k)
     s = 1 / (z + x)
+    K = counts.shape[1]
+    f = counts.sum(axis=1) / n_shots
+    chi2 = z * K * f
     return dict(
-        score_mean=float(s.mean()),
+        score_mean=float(s.mean()),  # unstable for K <= 3 (E[1/chi2_1] diverges): prefer median
         score_median=float(np.median(s)),
         score_p10=float(np.percentile(s, 10)),
         score_p90=float(np.percentile(s, 90)),
+        loss_mean=float(np.mean(z + x)),  # well-behaved summary: mean of z + x
         z_mean=float(np.mean(z[np.isfinite(z)])) if np.isfinite(z).any() else np.inf,
         x_mean=float(x.mean()),
+        chi2_ratio=float(np.mean(chi2[np.isfinite(chi2)]) / max(K - 1, 1)),  # 1 = shot noise only
     )
