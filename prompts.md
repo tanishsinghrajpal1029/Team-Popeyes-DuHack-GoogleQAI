@@ -586,52 +586,6 @@ gate and idle noise, 3 calibrations: ours ahead on every case by 2–10% (ARCHIT
 To meet the 15-minute budget the full-range comparison and the standard-track notebook benchmark
 were stopped and only the organizer's cases were run. Decision: ours supersedes; nothing merged.)
 
-## Session 6 — Sun Oct 25, 2026, ~09:30 AM ET (model: Claude Opus 5.5)
-
-### Prompt 59
-
-> we need to do the devpost writeup. the devpost should include our brainstorming, ideation, and
-> implementation, dev process with intermediate architectures/performance scores/design
-> decisions, our eval harness, noise, and the final architecture. a latex file and its compilation
-> has also been added that may be useful or may not be wrt contextualizing some of the math stuff.
->
-> performance progression over time can likely be found under relevant docs such as architecture
->
-> the writeup does not need to be especially long since most of the judging is done via
-> presentation. focus on clarity and accessibility to non-quantum specialists (think first-year
-> undergrads), and rigor. first create an outline of the writeup.
-
-(The assistant read ARCHITECTURE.md, README.md, `math.tex`, this log and the commit history, and
-proposed an 11-section outline with a timeline of intermediate architectures and their measured
-effects.)
-
-### Prompt 60
-
-> dont mention names,roles,or work distribution. that'll be covered in the devpost teams section.
-> dont talk about the UNO Q. md latex guide has been added as a pdf in pwd. dont commit anything
-> yet. convert to ET is fine. build the preliminary docs now
-
-(The assistant wrote `DEVPOST.md` (uncommitted), using Devpost's math syntax from the guide:
-`\\( \\)` inline and `$$ $$` display. It linted the math for Markdown constructs that could
-corrupt it. Every number was taken from ARCHITECTURE.md, `math.tex` or
-`notebook_standard_totals.csv`, and commit times were converted to ET.)
-
-### Prompt 61
-
-> i've committed. can you check the figure paths? they dont seem to fetch and 404 instead
-
-(The assistant found every linked file on `origin/main` and traced the 404s to the repository
-being private; the remedy is to make the repository public or upload the images to Devpost.)
-
-### Prompt 62
-
-> remove that thanks
-
-(The assistant removed the committed `md_latex` (the Devpost Markdown/LaTeX help page) from the
-repository, keeping the local copy.)
-
----
-
 ## Teammate log — PSC Bridges-2 circuit search
 
 The prompts a teammate ([T]) gave to an AI assistant (Claude, by Anthropic) that set up,
