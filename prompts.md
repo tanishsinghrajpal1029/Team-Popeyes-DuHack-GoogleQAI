@@ -435,3 +435,59 @@ and mean 100.8. Bonus: the notebook's `score_solution`, with a `validate_circuit
 the bonus text (the notebook never defines one), gave 37.1542 over 56 cases. All were exact and
 routed, with no measurements, and the slowest build took 7.7 s. Results are in
 `notebook_standard.csv`, `notebook_standard_totals.csv` and `notebook_bonus.csv`.)
+
+### Prompt 44 (model: Claude Opus 5.5)
+
+> can you rewrite main.tex so the math is understandable from a freshman undergraduate level and so
+> that it uses @alan.sty for styling?
+
+Follow-up: "retry now".
+
+(The assistant rewrote `docs/writeup/main.tex` as a KOMA `scrartcl` document that loads
+`\usepackage[noasy]{alan}`. It adds a crash course on qubits, gates and noise, and uses alan's
+definition, fact, proposition, claim, example and remark boxes. Each step is explained from
+first principles: the counting proofs of the ideal correlators and of the Krawtchouk shortcut,
+why E[1/χ²_ν] diverges for ν ≤ 2, a worked W₄ tree example, and why over-rotation moves
+populations at first order while phase errors move them only at second order. All numbers are
+unchanged from the previous version. The local TeX Live lacks `derivative`, `yhmath` and
+`thmtools`, so the assistant built them from CTAN in a scratch directory to check that the
+document compiles: 14 pages, with no errors or warnings.)
+
+### Prompt 45 (model: Claude Opus 5.5)
+
+> further simplify @main.tex - we plan on including snippets of it as part of our final
+> submission, so it should make sense to a new undergraduate reader and be able to be explained by
+> a new undergraduate. There doesn't need to be too much specific detail, but rather we want to
+> highlight 3-4 main points
+
+(The assistant restructured `docs/writeup/main.tex` around four ideas, each in its own
+self-contained section: (1) the score rewards small, balanced cases; (2) the W-state broadcast
+tree; (3) computer search for exact circuits at N ≤ 8; (4) choosing qubits. It kept a one-page
+background and a short "putting it together" section with a 6-row results table and lessons
+learned. It removed the Krawtchouk shortcut, the closed forms for K = 2 and 3, the 1-CZ
+impossibility argument, the coherent-error and minimax-regret analysis, the synthesized B-E
+blocks, the winner's-curse correction and the negative-results list, and reduced the detail on
+Bryan's construction to one sentence. The numbers it kept are unchanged from the previous
+version. Two wordings were changed for accuracy: 1% imbalance gives λ ≈ 0.9, and the tree needs
+"far fewer rounds than a line" rather than log N rounds. It compiled to 6 pages, down from 14,
+with no warnings.)
+
+### Prompt 46 (plan mode, model: Claude Opus 5.5)
+
+> /plan I want to create manim animations / visualizations based on the docs in
+> @docs/writeup/main.tex. Plan it
+
+Answers to the assistant's clarifying questions: used in the 7-min live talk and as
+repo/README extras; the core 5 scenes; classic 3b1b dark style.
+
+(The assistant planned and then built `animations/`: `prep.py` runs the deployed code
+(`main._best_w_tree`, `main.build`, `main._best_path`, `main._predict_tiny`) and
+`experiments/synth.py` on calibration seed 0, and writes `animations/data/*.json`, with asserts
+pinning the writeup's numbers (E[S] 51.4 / 33.3 / 1.3 for K = 2, 8.15 for K = 3, D⁴₂
+synthesized at 5 CZ, W₁₀ tree 15 vs chain 37 moments). `scenes.py` has five scenes:
+`DickeIntro`, `ScoreTail`, `WTree`, `Synthesis`, `Placement`. Each is split into beats, rendered
+by `render.sh` into `figures/anim/` as 1080p60 MP4s, per-beat clips and README GIFs. On
+seed 0 the W₂ pair scan picks the same pair as the generic tree layout, so the Placement
+scene shows the scan's spread (best 79.6, median 41.2, worst 20.1 E[S]) instead of the
+writeup's seed-averaged +9%.)
+

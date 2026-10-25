@@ -69,6 +69,9 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1   # parallel jobs: one BLAS thre
 # slide figures (score_tail, ceiling_fraction*, cz_counts*, tree_vs_chain)
 .venv/bin/python experiments/figures.py
 
+# manim animations of the writeup's four ideas -> figures/anim/ (setup: see "Animations" below)
+.venv/bin/python animations/prep.py && animations/render.sh
+
 # rebuild submission.ipynb from main.py and execute it
 .venv/bin/python experiments/make_notebook.py --run
 # score submission.ipynb with its own functions: overall_score (standard) and score_solution (bonus)
@@ -110,6 +113,34 @@ the same CZ pattern has many exact angle sets, and they respond differently to e
 .venv/bin/python experiments/vqe.py gap --cases 4,2 5,2 6,2 6,3
 ```
 
+## Animations
+
+Manim scenes for the four ideas in `docs/writeup/main.tex`, for the talk and this README.
+Every number on screen comes from our code: `animations/prep.py` runs `main.py` and
+`experiments/*` on calibration seed 0 and writes `animations/data/*.json`, and the scenes read
+only those files. The CZ table in Synthesis is copied from the writeup.
+
+```bash
+uv pip install --python .venv/bin/python --prerelease=allow -r animations/requirements.txt  # manim 0.22.0
+.venv/bin/python animations/prep.py          # ~15 s, asserts the numbers quoted in the writeup
+animations/render.sh                         # all scenes; or e.g. animations/render.sh WTree
+.venv/bin/manim -ql animations/scenes.py WTree   # quick preview
+```
+
+`figures/anim/<Scene>.mp4` (1080p60) and `<Scene>.gif` (480p) are full scenes;
+`figures/anim/sections/` has one clip per beat, for one slide click each.
+
+| Scene | Shows |
+|---|---|
+| `DickeIntro` | D⁴₂ and W₄ as amplitude bars; bit-flip and qubit-swap symmetry |
+| `ScoreTail` | S = 1/(z+x); why K = 2 has lucky draws; E[S] by K collapsing as imbalance δ goes 0 → 3% |
+| `WTree` | tree vs line on a toy, then the real W₁₀ tree and chain on Willow racing in circuit moments (15 vs 37) |
+| `Synthesis` | brickwork depth search, L-BFGS loss to 10⁻¹³, CZ pruning 6 → 5 for D⁴₂, CZ table vs textbook |
+| `Placement` | Willow coloured by CZ error, beam search for a 6-qubit path, readout matching, W₂ pair scan |
+
+![ScoreTail](figures/anim/ScoreTail.gif)
+![WTree](figures/anim/WTree.gif)
+
 ## Layout
 
 ```
@@ -133,6 +164,7 @@ experiments/make_notebook.py  main.py -> submission.ipynb
 experiments/bench_notebook.py submission.ipynb scored by its own overall_score / score_solution
 docs/                   Bryan's derivations of his building blocks
 docs/writeup/           LaTeX appendix on the mathematical choices (compile main.tex in Overleaf)
+animations/             manim scenes of the writeup (prep.py -> data/*.json -> scenes.py -> figures/anim/)
 experiments/results/    every CSV behind the slides
 tests/                  pytest suite
 prompts.md              every AI prompt used (sponsor requirement)

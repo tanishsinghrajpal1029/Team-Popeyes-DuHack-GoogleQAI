@@ -1,326 +1,298 @@
-\documentclass[10pt]{article}
-\usepackage[margin=0.75in]{geometry}
-\usepackage{amsmath,amssymb}
+\documentclass[11pt]{scrartcl}
+\usepackage[noasy]{alan}
 \usepackage{booktabs}
 \usepackage{graphicx}
-\usepackage[font=small,skip=2pt]{caption}
-\usepackage{enumitem}
-\usepackage{microtype}
-\usepackage[hidelinks]{hyperref}
+\usepackage{tikz}
 
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{0.35em}
-\setlist{nosep,leftmargin=*}
-\makeatletter
-\renewcommand\section{\@startsection{section}{1}{\z@}%
-  {-1.1ex \@plus -.4ex \@minus -.2ex}{0.5ex}{\normalfont\large\bfseries}}
-\makeatother
+\setkomafont{caption}{\small}
+\setlist{itemsep=2pt}
 
 \newcommand{\ket}[1]{\lvert #1\rangle}
-\newcommand{\bra}[1]{\langle #1\rvert}
-\newcommand{\E}{\mathbb{E}}
 \newcommand{\D}[2]{D^{#1}_{#2}}
-\newcommand{\CZ}{\mathrm{CZ}}
+\newcommand{\CZ}{\ensuremath{\mathrm{CZ}}}
 \newcommand{\file}[1]{\texttt{\small #1}}
 
+\title{Preparing Dicke States on Willow}
+\subtitle{Four ideas behind our solution}
+\author{Team Popeyes}
+\date{DuQuantum $\times$ Google Quantum AI Challenge, Standard Track $\cdot$ October 25, 2026}
+
 \begin{document}
+\maketitle
 
-\begin{center}
-  {\Large\bfseries Preparing Dicke States on Willow: the Mathematical Choices}\\[3pt]
-  Team Popeyes $\cdot$ DuQuantum $\times$ Google Quantum AI Challenge, Standard Track $\cdot$ October 25, 2026
-\end{center}
+\begin{abstract}
+  Our function \file{create\_dicke\_state} builds a circuit that prepares a Dicke state exactly on
+  Google's Willow chip. This note explains the four ideas that shaped it: (1) the judges' score
+  rewards small, perfectly balanced cases far more than large ones; (2) W states can be spread out
+  along a tree instead of a line; (3) for small cases a computer search finds much cheaper exact
+  circuits than the textbook recipe; (4) where the circuit sits on the chip matters as much as what it
+  is. We assume only vectors, $2\times2$ matrices, binomial coefficients and averages.
 
-Our \file{create\_dicke\_state} returns an exact circuit of \CZ{} and \texttt{PhasedXZ} gates on
-calibrated Willow qubits. This appendix states the mathematical facts that fixed each design
-choice, each with a short justification. Every number is \emph{simulated}: calibrated
-depolarizing gate errors, $T_1=68\,\mu$s~\cite{willow}, $T_\varphi=100\,\mu$s (assumed), and
-asymmetric readout flips. Nothing here has run on hardware. File paths refer to the repository.
+  All numbers come from \emph{simulation} with the calibrated error rates, energy decay
+  ($T_1=68\,\mu$s~\cite{willow}), dephasing and readout errors. Nothing here has run on real hardware.
+\end{abstract}
 
-\section{Notation and the judges' score}
+%% ---------------------------------------------------------------------------
+\section{Background}
 
-$\ket{\D Nn}=\binom Nn^{-1/2}\sum_{|b|=n}\ket b$, $K=\binom Nn$, $k=\min(n,N-n)$,
-$R_y(\theta)=e^{-i\theta Y/2}$. Each case is judged from $10^4$ shots in the $Z$ basis and
-$10^4$ in the $X$ basis:
+\subsection{Qubits and the Dicke state}
+
+A \vocab{qubit} is a unit vector $a\ket0+b\ket1$ with $a^2+b^2=1$. Measuring it gives $0$ with
+probability $a^2$ and $1$ with probability $b^2$. A state of $N$ qubits assigns an
+\vocab{amplitude} $\psi_b$ to each of the $2^N$ bit strings $b$, and measuring all qubits gives
+string $b$ with probability $\psi_b^2$. (Amplitudes may be complex in general, but every state in
+this note is real.)
+
+\begin{definition}[Dicke state]
+  The \vocab{Dicke state} $\ket{\D Nn}$ is the equal superposition of every $N$-bit string with
+  exactly $n$ ones. There are $K=\binom Nn$ such strings, each with amplitude $1/\sqrt K$. The case
+  $n=1$ is called the \vocab{W state} $\ket{W_N}$.
+\end{definition}
+
+\begin{example}[$\D42$]
+  $\ket{\D42}=\tfrac{1}{\sqrt6}\bigl(\ket{0011}+\ket{0101}+\ket{0110}+\ket{1001}+\ket{1010}+\ket{1100}\bigr)$.
+  Measuring it gives each of these six strings with probability $1/6$.
+\end{example}
+
+The circuit must produce this vector \emph{exactly}, signs included, when there is no noise.
+
+\subsection{Gates and their cost}
+
+We may use any single-qubit gate, and one two-qubit gate, the \vocab{controlled-Z}
+($\CZ$), which flips the sign of $\ket{11}$. A CZ only works between qubits that are physically
+connected on the chip, and it fails about ten times as often as a single-qubit gate. So we measure a
+circuit's cost mainly by its \vocab{CZ count}, and second by its \vocab{depth} (number of time
+steps), because qubits also decay while they wait.
+
+Two facts make the problem easier. First, flipping every bit turns $\ket{\D Nn}$ into
+$\ket{\D N{N-n}}$, so we only build $n\le N/2$ and add a layer of $X$ gates when needed. Second,
+swapping two qubits leaves a Dicke state unchanged, so any placement of a circuit on the chip is a
+valid answer and qubit order never has to be fixed up.
+
+%% ---------------------------------------------------------------------------
+\section{Idea 1: the score rewards small, perfectly balanced cases}\label{sec:score}
+
+\subsection{How the judges score}
+
+For each test case $(N,n)$ the judges run our circuit $10^4$ times and measure every qubit, and
+another $10^4$ times in a rotated basis that is sensitive to the signs of the amplitudes. The score
+for the case is
 \[
-  S=\frac{1}{z+x},\qquad
-  z=\frac{\chi^2}{Kf},\qquad
-  \chi^2=\sum_{|b|=n}\frac{(c_b-F/K)^2}{F/K},\qquad
-  x=\sum_{j=1}^{M}\epsilon_j^2 .
+  S=\frac{1}{z+x}.
 \]
-Here $f$ is the fraction of $Z$ shots with exactly $n$ ones, $F=10^4f$, and $c_b$ counts valid
-string $b$. $\epsilon_j$ is the relative error (absolute where the ideal is 0) of $\bar C_j$, the
-average of $\langle\prod_{i\in A}X_i\rangle$ over all $j$-subsets $A$. $M$ is undisclosed; we
-report $M=N$, the strictest choice.
+\begin{itemize}
+  \item The \textbf{$Z$ term} $z$ asks: \emph{is every valid string equally likely?} Shots with the
+        wrong number of ones are thrown away, leaving a fraction $f$. The remaining counts are
+        compared with a perfectly even split using Pearson's \vocab{chi-squared statistic}
+        $\chi^2=\sum_b (\text{observed}_b-\text{expected})^2/\text{expected}$, and
+        $z=\chi^2/(Kf)$.
+  \item The \textbf{$X$ term} $x$ asks: \emph{are the signs right?} It compares averaged
+        correlations in the rotated basis with their ideal values.
+\end{itemize}
+Small $z$ and $x$ mean a large score, and the total is the sum over all test cases.
 
-\textbf{Ideal correlators.} $X_A=\prod_{i\in A}X_i$ flips the bits in $A$, so $\bra D X_A\ket D$
-is the fraction of weight-$n$ strings that keep weight $n$, i.e.\ that have exactly $j/2$ ones in $A$:
-$C^\star_j=\binom{j}{j/2}\binom{N-j}{n-j/2}/\binom Nn$ for even $j$, and $0$ for odd $j$.
+\subsection{Why small \texorpdfstring{$K$}{K} is worth so much}
 
-\textbf{Fast scoring.} For one $X$-basis shot $b$ of weight $w$, the average of
-$(-1)^{|b\cap A|}$ over all $j$-subsets $A$ is $\mathcal K_j(w)/\binom Nj$, with the Krawtchouk
-polynomial $\mathcal K_j(w)=\sum_i(-1)^i\binom wi\binom{N-w}{j-i}$. So $x$ depends only on the
-Hamming-weight histogram of the $X$ shots. That is what makes 20{,}000 simulated judged runs
-per case cheap (\file{experiments/scoring.py}).
+The score is the \emph{reciprocal} of a random number. If $z$ is usually around $1$ but sometimes
+lands very close to $0$, then $S$ is usually around $1$ but sometimes enormous, and those rare
+large values dominate the average.
 
-\section{The score is heavy-tailed: small $K$ and uniformity come first}\label{sec:score}
+\begin{fact}
+  For a perfect state, $\chi^2$ behaves like a sum of $K-1$ squared standard normal variables (a
+  $\chi^2_{K-1}$ distribution). With only one or two terms in the sum ($K=2$ or $3$), the sum lands
+  near $0$ often enough that the average of $1/\chi^2$ is infinite. With more terms, it is
+  $1/(K-3)$.
+\end{fact}
 
-\textbf{Perfect state.} With no imbalance, $\chi^2\sim\chi^2_{K-1}$. Writing $a=Kfx$,
-\[
-  \E[S]=Kf\,\E\!\left[\frac{1}{\chi^2_{K-1}+a}\right]\approx
-  \begin{cases}
-    \dfrac{Kf}{K-3}, & K>3\quad\bigl(\E[1/\chi^2_\nu]=1/(\nu-2)\bigr),\\[8pt]
-    \tfrac32 f\,e^{a/2}E_1(a/2)\;\approx\;\tfrac32 f\bigl(\ln\tfrac2a-\gamma\bigr), & K=3,\\[6pt]
-    2f\sqrt{\pi/(2a)}\;\operatorname{erfcx}\!\sqrt{a/2}\;\approx\;\sqrt{\pi f/x}, & K=2.
-  \end{cases}
-\]
-The $K=2$ and $K=3$ forms are exact, because the $\chi^2_1$ and $\chi^2_2$ densities integrate in
-closed form. For $K>3$ the mean is finite even at $x=0$. For $K\le3$ only the $X$-term floor keeps
-it finite, and at $K=2$ it grows like $x^{-1/2}$.
+So for $K=2,3$ only the $X$ term stops the expected score from blowing up. For a perfect state
+($f=0.9$, $x=10^{-3}$):
 
 \begin{center}\small
 \begin{tabular}{lcccccc}
   \toprule
   $K$ & 2 & 3 & 4 & 6 & 10 & 20\\
   \midrule
-  $\E[S]$, perfect state, $f=0.9$, $x=10^{-3}$ & 51.4 & 8.15 & 3.34 & 1.79 & 1.28 & 1.06\\
+  expected score $\EE[S]$ & 51.4 & 8.15 & 3.34 & 1.79 & 1.28 & 1.06\\
   \bottomrule
-\end{tabular}\\[2pt]
-At $K=2$: $x=10^{-4}$ gives 166 and $x=10^{-2}$ gives 15.2 (\file{scoring.expected\_score}).
+\end{tabular}
 \end{center}
 
-\textbf{Imbalance.} If valid string $b$ has probability $(1+\delta_b)/K$ inside the subspace,
-$\chi^2$ becomes noncentral with
-\[
-  \lambda=\sum_b\frac{\bigl(F(1+\delta_b)/K-F/K\bigr)^2}{F/K}=F\,\overline{\delta^2}=10^4 f\,\overline{\delta^2}.
-\]
-Then $\E[\chi^2]=K-1+\lambda$, so $z$ grows by about $10^4\,\overline{\delta^2}/K$. A 1\% rms
-imbalance lowers $\E[S]$ at $K=2$ from 51.4 to 33.3, and 3\% lowers it to 1.3. At $K=4$ the same
-steps give 3.34, 2.53 and 0.53.
+A single $K=2$ case (for example $W_2$) is worth about fifty large cases.
 
-\textbf{Consequences.}
-\begin{itemize}
-  \item The judges sum single draws, so our objective is $\sum\E[S]$. We compute it by quadrature
-        over the noncentral $\chi^2$ density, with $x$ held at its mean. A resampled mean is
-        unusable at $K\le3$, where a few lucky draws dominate it.
-  \item Priority order: a valid circuit on every case, since any valid circuit scores $>0$; then
-        uniformity ($\delta_{\rm rms}\lesssim1\%$) and a low $x$ floor at small $K$; then
-        leakage, which costs only $1/f$; then coherence at large $N$.
-  \item Pre-compensating known biases is forbidden, because the noiseless state must be exact.
-        Uniformity can only come from the construction and the choice of qubits.
-\end{itemize}
+\subsection{Small imbalances destroy the bonus}
+
+Suppose string $b$ appears with probability $(1+\delta_b)/K$ instead of $1/K$. Plugging this into
+the chi-squared formula adds, on average,
+\[
+  \lambda=10^4 f\,\overline{\delta^2}
+\]
+to $\chi^2$, where $\overline{\delta^2}$ is the average of $\delta_b^2$. More importantly, $\chi^2$
+can no longer land near $0$, so the lucky draws disappear. A 1\% imbalance gives $\lambda\approx0.9$
+and drops the $K=2$ score from 51.4 to 33.3. A 3\% imbalance gives $\lambda\approx8$ and drops it to
+1.3.
 
 \begin{figure}[h]
   \centering
-  \includegraphics[width=0.44\linewidth]{figures/score_tail.png}\hfill
-  \includegraphics[width=0.44\linewidth]{figures/tree_vs_chain.png}
-  \caption{Left: median single-draw score versus $K$ for a perfect state and for 1\% and 3\% rms
-    imbalance. Right: $X$ term of $W_N$ under gate and idle noise, tree versus chain
-    (\file{w\_tree.csv}).}
+  \includegraphics[width=0.6\linewidth]{figures/score_tail.png}
+  \caption{Median single-run score against $K$ for a perfect state and for 1\% and 3\% imbalance.}
 \end{figure}
 
-\section{Two free reductions}
+\begin{remark}[Takeaway]
+  Our priorities, in order: (1) always return a valid circuit, since any valid circuit scores above
+  zero; (2) keep the small-$K$ cases balanced to within about 1\% and their signs accurate; (3) keep
+  the fraction $f$ of valid shots high; (4) only then worry about large $N$. We may not fix a known
+  bias by tilting the amplitudes, because the noiseless state must be exact. Balance has to come
+  from the construction and from choosing good qubits.
+\end{remark}
 
-\textbf{Complement.} $X^{\otimes N}\ket{\D Nn}=\ket{\D N{N-n}}$, because flipping every bit maps
-weight-$n$ strings bijectively onto weight-$(N-n)$ strings. We only build $k\le N/2$; the final
-$X$ layer merges into the last single-qubit gates.
+%% ---------------------------------------------------------------------------
+\section{Idea 2: spread a W state along a tree, not a line}
 
-\textbf{Permutation symmetry.} The target is invariant under qubit permutations and the returned
-qubits are a set. Routing permutations therefore never need undoing, and any placement of a
-construction's shape on the chip is a valid answer.
+A W state has a single excitation (a single ``1'') shared evenly among $N$ qubits. Think of it as
+probability $1$ that must end up split into $N$ equal shares of $1/N$.
 
-\section{W states ($k=1$): a broadcast tree with $2N-3$ CZ}
+\begin{algorithm*}
+  Choose a tree of connected qubits on the chip with root $r$. Start with $r$ in $\ket1$ and the
+  rest in $\ket0$. In each round, every qubit $v$ that holds some probability passes to one child $c$
+  exactly the share its subtree needs, $s(c)/N$, where $s(c)$ is the number of qubits under $c$
+  (including $c$). This uses the two-qubit \vocab{transfer}
+  \[
+    \ket{10}\mapsto\sqrt{1-p}\,\ket{10}+\sqrt p\,\ket{01},\qquad \ket{00}\mapsto\ket{00},
+  \]
+  where $p$ is the fraction of $v$'s current share that moves to $c$.
+\end{algorithm*}
 
-\textbf{Construction.} Take a spanning tree of the chosen qubits with root $r$, and let $s(v)$ be
-the size of the subtree under $v$. The root starts with the excitation. In each round, every qubit
-$v$ that holds probability $m_v/N$ hands one child $c$ the fraction $p=s(c)/m_v$:
+\begin{example}[$W_4$ in two rounds]
+  Take the four-qubit tree below, rooted at $r$.
+  \begin{center}
+  \begin{tikzpicture}[every node/.style={circle,draw,minimum size=6mm,inner sep=0pt},
+      level distance=10mm, sibling distance=18mm]
+    \node {$r$} child {node {$a$} child {node {$c$}}} child {node {$b$}};
+  \end{tikzpicture}
+  \end{center}
+  Round 1: $r$ holds everything and gives half to $a$ (whose subtree has 2 of the 4 qubits).
+  Round 2, both at once: $r$ gives half of its share to $b$, and $a$ gives half of its share to $c$.
+  Every qubit now holds $1/4$. A line $r-a-c-b$ would need three rounds.
+\end{example}
+
+\textbf{Cost.} The very first transfer acts on the known state $\ket{10}$ and costs 1 CZ. Every
+later transfer must handle both $\ket{00}$ and $\ket{10}$ correctly, and that needs 2 CZ. The total
+is $1+2(N-2)=2N-3$ CZ, the same as a line, and an exhaustive search shows it is the minimum for
+$W_3$ and $W_4$.
+
+\textbf{Why a tree helps.} The tree does all transfers of a round at the same time, so it needs far
+fewer rounds than a line, which needs $N-1$. For $W_{10}$ that means 15 time steps instead of 37,
+and with idle noise the $X$ term drops from 0.0075 to 0.0042. The circuit also keeps exactly one
+excitation in every branch at all times, so energy decay lowers every valid string equally and
+creates no imbalance.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.6\linewidth]{figures/tree_vs_chain.png}
+  \caption{$X$ term of $W_N$ under gate and idle noise: tree against line (chain).}
+\end{figure}
+
+%% ---------------------------------------------------------------------------
+\section{Idea 3: let a computer search for exact circuits}\label{sec:synth}
+
+The textbook construction of Bärtschi and Eidenbenz~\cite{be19} works for every $N$ and $n$, but it
+uses gates between qubits that are not neighbours on the chip. Fixing that adds many CZs. For small
+$N$ we instead let a computer find the circuit.
+
+\textbf{The template.} Alternate layers of single-qubit rotations (each with its own angle) with
+layers of CZ gates between neighbouring qubits. The output state $\ket{\psi(\theta)}$ depends on the
+list of angles $\theta$.
+
+\textbf{The search.} The circuit is exact when its output matches the Dicke state, so we minimize
+the \vocab{infidelity}
 \[
-  \ket1_v\ket0_c\mapsto\sqrt{1-p}\,\ket{10}+\sqrt p\,\ket{01},\qquad \ket{00}\mapsto\ket{00}.
+  \mathcal L(\theta)=1-\bigl(\text{overlap of }\ket{\psi(\theta)}\text{ with }\ket{\D Nn}\bigr)^2
 \]
-Afterwards $c$ holds $s(c)/N$ and $v$ keeps $(m_v-s(c))/N$. By induction every qubit ends with
-exactly $1/N$. Every branch carries one excitation and all amplitudes are real and positive, so
-the output is exactly $\ket{W_N}$.
-
-\textbf{Cost.} The first transfer acts on a product input, so it is $R_y$ on $c$, a CNOT and an
-$X$: 1 CZ. Every later transfer must handle both $\ket{00}$ and $\ket{10}$, because $v$ holds the
-excitation only in some branches. That is a Givens rotation, 2 CZ. One CZ cannot do it: in
-$(A_1\otimes B_1)\,\CZ\,(A_0\otimes B_0)\ket{x}\ket0$, keeping $\ket{00}$ a product state forces
-$A_0$ to map basis states to basis states, and then $\ket{10}$ stays a product too (Bryan's
-argument, \file{docs/bryan\_constructions.md}). The total is $1+2(N-2)=2N-3$ CZ. Exhaustive search
-shows this is optimal for $W_3$ (3 CZ) and $W_4$ (5 CZ).
-
-\textbf{Why a tree.} A chain has the same CZ count but $N-1$ sequential transfers. The tree runs
-the transfers of a round in parallel: $W_{10}$ takes 15 moments instead of 37, and $x$ drops from
-0.0075 to 0.0042 under idle noise. The circuit preserves excitation number, so every branch has
-the same $T_1$ exposure and idle decay causes no imbalance.
-
-\textbf{$K\le3$.} For $W_2$ the score is set by $x$ and $\lambda$, not by CZ count. We simulate
-every candidate qubit pair under the calibrated noise and keep the one with the highest predicted
-$\E[S]$: $+9\%$ expected score, $-5\%$ median, a deliberate trade toward the objective.
-
-\section{Whole-state synthesis for $N\le8$}\label{sec:synth}
-
-\textbf{Ansatz.} $L+1$ layers of $R_y$ on every qubit, separated by $L$ CZ layers drawn from a fixed
-shape: a path or a $2\times m$ ladder, edge-coloured into brickwork matchings. Dicke amplitudes are
-real and $\{R_y,\CZ\}$ circuits are real, so one angle per qubit per layer is all the freedom
-needed. The restriction costs no generality: $ZR_y(\theta)Z=R_y(-\theta)$ is the same identity as
-$XR_y(\theta)X=R_y(-\theta)$, on which the uniformly controlled rotations of~\cite{mottonen05} rely.
-That construction therefore compiles to $R_y$ and CZ and, given enough connectivity, reaches
-every real state.
-
-\textbf{Optimization.} We minimize $1-\langle D|\psi(\theta)\rangle^2$ with L-BFGS, using an exact
-gradient by backpropagation ($\partial_\theta R_y(\theta)=\tfrac12R_y(\theta+\pi)$), until the
-infidelity is below $10^{-13}$. We start at the smallest brickwork depth that becomes exact. Then
-we delete single CZs greedily, re-solve from the previous angles, and keep a deletion only if the
-circuit is exact again (\file{experiments/synth.py}).
+by gradient descent, until $\mathcal L<10^{-13}$ (exact to machine precision). Then we delete CZs
+one at a time, re-optimize, and keep each deletion only if the circuit becomes exact again.
 
 \begin{center}\small
 \begin{tabular}{lcccccc}
   \toprule
   case & $\D42$ & $\D52$ & $\D63$ & $\D73$ & $\D83$ & $\D84$\\
   \midrule
-  CZ, synthesized & 5 & 10 & 15 & 25 & 31 & 27\\
-  CZ, routed B-E baseline & 21 & 35 & 80 & 98 & 123 & 162\\
+  CZ, computer search & 5 & 10 & 15 & 25 & 31 & 27\\
+  CZ, textbook (routed) & 21 & 35 & 80 & 98 & 123 & 162\\
   \bottomrule
 \end{tabular}
 \end{center}
-With one CZ fewer than deployed, the best infidelity is $3\times10^{-3}$ or worse for $\D42$,
-$\D52$, $\D62$ and $\D63$ (\file{vqe\_gap.csv}), so approximate circuits are not an option.
-Synthesis takes minutes, so the angles are cached in \file{main.py}. Placement (8 grid symmetries $\times$ translations) happens at
-build time.
 
-\textbf{Choosing among exact angle sets.} One CZ pattern admits many exact angle sets, and they
-differ under coherent errors that our noise model lacks. Insert a small error $e^{-i\epsilon G}$
-into a real circuit. For $R_y$ over-rotation $G\propto Y$, and $-iY$ is real, so the real
-amplitudes change at first order and populations move by $O(\epsilon)$. For stray $Z$ phases and
-CZ conditional-phase errors $G$ is real and diagonal. The first-order change is then $i$ times a
-real vector, orthogonal to the amplitudes, so populations move only by $O(\epsilon^2)$. On the
-deployed $\D42$, shrinking $\epsilon$ from $10^{-2}$ to $10^{-3}$ cuts the population error
-$10\times$ for over-rotation and $100\times$ for stray $Z$. The pick therefore models only
-over-rotation. With $L(c,\sigma)=\E[\mathrm{loss}]_c+\lambda_c(\sigma/1\%)^2/(Kf)$ and
-$\sigma\in\{0,0.1,0.2,0.3,0.5,1\}\%$, we deploy the minimax-regret candidate
-\[
-  c^\star=\arg\min_c\,\max_\sigma\Bigl[L(c,\sigma)-\min_d L(d,\sigma)\Bigr],
-\]
-chosen on calibration seed 0 and checked on seeds 1--2. Sensitivity to 1\% over-rotation drops
-1.1--5.5$\times$ ($\D52$: $\lambda$ from 50 to 9). Under our standard noise model, without
-over-rotation, the change in ceiling share is between $-0.9$ and $+2.6$ points.
-The 31-CZ $\D83$ has no alternative exact angle set yet.
+The search takes minutes, so we run it once and store the angles in \file{main.py}. Often several
+different angle sets are exact. We keep the one least sensitive to rotations that are slightly too
+large, a systematic error our noise model does not include (for $\D52$ this cut the resulting
+imbalance $\lambda$ from 50 to 9).
 
-\section{B\"artschi--Eidenbenz with synthesized SCS blocks}
+The search stops scaling at about $N=9$: overnight runs found exact circuits, but with more CZs than
+the constructions we already had.
 
-B-E~\cite{be19} uses $\ket{\D mr}=\sqrt{r/m}\,\ket{\D{m-1}{r-1}}\ket1+\sqrt{(m-r)/m}\,\ket{\D{m-1}r}\ket0$
-to reach $\ket{\D Nk}$ from $\ket{0^{N-k}1^k}$ by applying $\mathrm{SCS}_N,\mathrm{SCS}_{N-1},\dots,\mathrm{SCS}_2$.
-$\mathrm{SCS}_m$ touches only the window of positions $m-k,\dots,m$.
+%% ---------------------------------------------------------------------------
+\section{Idea 4: put the circuit on the best qubits}
 
-\textbf{Observation.} Before step $m$ the first $m$ positions hold a sorted string, so the window
-($w=k+1$ qubits) only ever sees inputs $\ket{0^{w-l}1^l}$ with $l=0,\dots,k$, plus $\ket{1^w}$ when
-the window is the whole register. On these inputs the block must act as
-\[
-  \ket{0^{w-l}1^l}\mapsto\sqrt{l/m}\,\ket{0^{w-l}1^l}+\sqrt{(m-l)/m}\,\ket{0^{w-l-1}1^l0}
-  \quad(1\le l\le k,\ l<m),
-\]
-and fix $l=0$ and $l=m$. So each block is an isometry on a $(k+1)$- or $(k+2)$-dimensional subspace,
-not a full unitary on $2^{k+1}$ dimensions. The rest of the unitary is free.
+Willow's qubits and connections differ a lot in quality, and because of permutation symmetry we are
+free to place a circuit anywhere its shape fits. So we score every placement and keep the best one.
 
-\textbf{Synthesis.} We fit each block on $k+1$ consecutive path qubits with the same ansatz and
-pruning, using the loss $1-\bigl(\tfrac1B\sum_b\bra{\mathrm{out}_b}U\ket{\mathrm{in}_b}\bigr)^2$.
-It vanishes only when every column is right \emph{with a common sign}, so superpositions of inputs
-are mapped coherently. The CZ pattern is pruned once per $k$, and the angles are refit for every
-$m$. The whole B-E circuit is then nearest-neighbour on a path and needs no routing. Inner blocks
-cost 2, 4, 12, 17 and 29 CZ for $k=1,\dots,5$, so $\D N2$ costs about $4N$ CZ
-(\file{experiments/scs\_synth.py}). On the hardware track these circuits are a fallback; they are
-the main path for our bonus entry and for $N>20$.
+\textbf{The cost of a placement.} The fraction of good shots is roughly the probability that no
+error happens anywhere, $f\approx\prod(1-e)$, over every gate, idle period and measurement. Taking
+logarithms and using $\log(1-e)\approx-e$ for small $e$ turns this into a \emph{sum}: the cost of a
+placement is the total error probability of all the gates, idling and readouts it uses. Sums are easy
+to search over.
 
-\section{Placement: the cost is $\log\E[z]$}
+\textbf{Matching readout errors.} Measurement sometimes reads a 1 as a 0, and how often depends on
+the qubit. A string whose ones sit on ``leaky'' qubits is read correctly less often, which creates
+exactly the imbalance that Idea~1 says is so costly. A random choice of qubits gives about 0.6\%
+imbalance from readout alone. Since we may not tilt the amplitudes to compensate, we add a penalty
+for qubits whose readout errors differ, and prefer qubits that match.
 
-\textbf{Derivation.} From Section~\ref{sec:score}, $\E[z]\approx(K-1+\lambda)/(Kf)$, so
-$\log\E[z]\approx\mathrm{const}-\log f+\log\bigl(1+\lambda/(K-1)\bigr)$. Approximating $f$ by the
-probability that no error event occurs gives $-\log f\approx\sum e$ over all error locations. A
-placement's cost is therefore
-\[
-  C=\sum_{(q,q')}u_{qq'}\,e^{\CZ}_{qq'}+\sum_q\Bigl[g_q\,e^{1q}_q+\bigl(1-\tfrac nN\bigr)e^{0\to1}_q+\tfrac nN\,e^{1\to0}_q\Bigr]
-  +\tau\Bigl(\tfrac1{T_1}+\tfrac1{T_\varphi}\Bigr)+\log\Bigl(1+\frac{\lambda_{\rm ro}}{K-1}\Bigr),
-\]
-with $u_{qq'}$ CZ uses of coupler $(q,q')$, $g_q$ single-qubit gates per qubit, and $\tau$ the idle time.
-Each qubit of $\ket{\D Nn}$ reads 1 with probability $n/N$, and $1\to0$ readout errors are about
-twice the $0\to1$ rate, which is why the readout term is weighted.
+\textbf{The smallest case.} For $W_2$ ($K=2$), which is worth the most, we simulate every possible
+pair of connected qubits under the calibrated noise and keep the pair with the highest expected
+score. This alone gains 9\% in expected score.
 
-\textbf{Readout imbalance.} A valid string $b$ survives readout with probability
-$\prod_{i\in b}(1-e^{1\to0}_i)\prod_{i\notin b}(1-e^{0\to1}_i)\approx c\,\exp\bigl(-\sum_{i\in b}d_i\bigr)$,
-with $c$ independent of $b$ and $d_i=e^{1\to0}_i-e^{0\to1}_i$. Hence $\delta_b\approx-\sum_{i\in b}(d_i-\bar d)$. Its variance
-over random $n$-subsets is $\tfrac{n(N-n)}{N-1}\mathrm{Var}(d)$, so
-\[
-  \lambda_{\rm ro}=10^4 f\,\frac{n(N-n)}{N-1}\,\mathrm{Var}(d)
-\]
-(\file{main.\_readout\_lambda}). A random layout gives $\delta_{\rm rms}\approx0.6\%$. Since amplitudes
-cannot be pre-compensated, qubit choice is the only remedy.
+%% ---------------------------------------------------------------------------
+\section{Putting it together}
 
-\textbf{Winner's curse.} The minimum of many noisy estimates is biased low, so every calibrated
-rate enters as value $+1\sigma$. This changed none of 75 placements on the notebook's
-uniform-uncertainty calibrations; it matters only when uncertainties differ between qubits.
+The final \file{main.py} picks, for each $(N,n)$, the construction that scored best in simulation:
+the tree for W states, the computer-found circuits for $N\le8$, and Bryan's independent
+construction (a two-arm split that runs two smaller B-E circuits in parallel, written up in
+\file{docs/bryan\_constructions.md}) for larger cases. Finally, consecutive single-qubit gates are
+merged, and idle qubits get short pulse sequences (\vocab{dynamical decoupling}) that cancel slow
+phase drift without changing the noiseless state.
 
-\section{Compilation}
-
-Single-qubit runs between CZs merge into one \texttt{PhasedXZ}, and every moment is all-CZ or
-all-single-qubit. Dynamical decoupling inserts $XYXY=-I$, which leaves the noiseless state unchanged
-up to a global phase. It is applied only after a qubit's first gate, since $\ket0$ cannot dephase,
-and only in idle windows with at least 4 free single-qubit slots: short idles have nothing to
-refocus, so there only the pulse error shows.
-
-\section{Portfolio with Bryan's solution}
-
-Bryan's independent solution is vendored in \file{main.py}; its derivations are in
-\file{docs/bryan\_constructions.md}. It rests on a 1-CZ controlled $R_y$ onto a target known to be
-$\ket0$ ($R_y(\tfrac\theta2)ZR_y(-\tfrac\theta2)=R_y(\theta)Z$ and $Z\ket0=\ket0$), a 5-CZ
-``moving-hole'' gate and a 4-CZ merged top block that make each SCS step nearest-neighbour, and a
-two-arm split
-$\ket{\D Nk}=\sum_j\sqrt{P(j)}\,\ket{\D a{k-j}}\ket{\D bj}$ with hypergeometric
-$P(j)=\binom bj\binom a{k-j}/\binom Nk$ (compare the divide-and-conquer circuits of~\cite{be22}).
-$P(j)$ is written in unary by a $(k-1)$-CZ thermometer chain and copied across a ladder with $k$ CZ
-in one layer, after which both arms run B-E in parallel. Under our harness it wins for $k=2$ at
-$N\ge6$ (1--7\%) and for $k\ge3$ at $N\ge9$ (21--39\%; $\D{10}5$ needs 85 CZ against our 185), and
-\file{main.py} dispatches by that measured rule.
-
-\section{Results}
-
-\begin{center}\footnotesize
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lrlrcccrr}
+\begin{center}\small
+\begin{tabular}{lrlccc}
   \toprule
-  case & $K$ & construction & CZ & $f$ & $\chi^2/(K-1)$ & $x$ & $\E[S]$ & \% of ceiling\\
+  case & $K$ & construction & CZ & $\EE[S]$ & \% of perfect\\
   \midrule
-  $W_2$     &   2 & tree, best pair       &   2 $\to$ 1  & 0.990 & 1.041 & 0.0005 & 54.26 $\to$ 65.55 & 96 $\to$ 96\\
-  $W_3$     &   3 & tree                  &   4 $\to$ 3  & 0.977 & 1.026 & 0.0013 &  7.45 $\to$ 7.97  & 92 $\to$ 97\\
-  $\D42$    &   6 & synthesized           &  21 $\to$ 5  & 0.968 & 1.019 & 0.0058 &  1.55 $\to$ 1.85  & 84 $\to$ 95\\
-  $\D63$    &  20 & synthesized           &  80 $\to$ 15 & 0.923 & 1.014 & 0.0347 &  0.54 $\to$ 1.03  & 48 $\to$ 88\\
-  $\D83$    &  56 & synthesized           & 123 $\to$ 31 & 0.865 & 1.026 & 0.1115 &  0.39 $\to$ 0.81  & 38 $\to$ 77\\
-  $\D84$    &  70 & synthesized           & 162 $\to$ 27 & 0.867 & 1.014 & 0.1235 &  0.24 $\to$ 0.80  & 24 $\to$ 77\\
-  $\D{10}2$ &  45 & Bryan's               &  97 $\to$ 31 & 0.842 & 1.014 & 0.0480 &  0.38 $\to$ 0.85  & 36 $\to$ 80\\
-  $\D{10}5$ & 252 & Bryan's               & 324 $\to$ 85 & 0.668 & 1.036 & 1.020  &  0.12 $\to$ 0.39  & 12 $\to$ 39\\
+  $W_2$     &   2 & tree, best pair  &   2 $\to$ 1  & 54.3 $\to$ 65.6 & 96\\
+  $W_3$     &   3 & tree             &   4 $\to$ 3  &  7.45 $\to$ 7.97 & 97\\
+  $\D42$    &   6 & computer search  &  21 $\to$ 5  &  1.55 $\to$ 1.85 & 95\\
+  $\D63$    &  20 & computer search  &  80 $\to$ 15 &  0.54 $\to$ 1.03 & 88\\
+  $\D84$    &  70 & computer search  & 162 $\to$ 27 &  0.24 $\to$ 0.80 & 77\\
+  $\D{10}5$ & 252 & Bryan's          & 324 $\to$ 85 &  0.12 $\to$ 0.39 & 39\\
   \bottomrule
 \end{tabular}
 \end{center}
-Means over calibration seeds 0--2, $M=N$, gate and idle noise. Arrows read first-day baseline
-$\to$ deployed; the baseline is routed B-E, with a chain for W states. Sources: \file{portfolio.csv}, and for $\D83$
-\file{d83\_export.csv}; the full 25-case table is in \file{ARCHITECTURE.md}. Over all 25 cases with
-$N\le10$ the portfolio gives $\sum\E[S]=102.0$ and $\sum$ median $=27.9$ (recorded before the $\D83$
-update). A perfect state gives 218.7 and 33.1. $W_2$ and $W_3$ alone hold 73.5 of our expected
-total and 185.5 of the perfect-state total, which is why Section~\ref{sec:score} drives the design.
 
-\textbf{Limits.} Not modeled: coherent errors (studied separately in Section~\ref{sec:synth}), ZZ crosstalk,
-leakage, per-qubit $T_1$ spread and drift. $T_\varphi$ and layer durations are assumed. Real
-hardware will score lower.
+Arrows read ``first-day baseline $\to$ final''. The last column compares our expected score with
+that of a perfect, noiseless state. Over all 25 cases with $N\le10$ our expected total is 102.0, out
+of 218.7 for a perfect state. $W_2$ and $W_3$ alone account for 73.5 of our total, which is exactly
+the concentration that Idea~1 predicted and that drove the whole design. The full table is in
+\file{ARCHITECTURE.md}.
 
-\section{What did not work}
+\subsection*{What we learned}
 
 \begin{itemize}
-  \item \textbf{Whole-state synthesis at $N=9$--$10$.} An overnight run found exact circuits of
-        33, 35, 98 and 136 CZ for $\D92$, $\D{10}2$, $\D94$ and $\D93$, against 27, 31, 63 and 50
-        deployed. Random-start brickwork stops scaling at $N\approx9$.
-  \item \textbf{Compressing Bryan's circuits.} Re-parametrizing his $\D93$ and deleting single CZs
-        recovered exactness 0 of 8 times (best residual $1.6\times10^{-4}$).
-  \item \textbf{ALAP scheduling} to keep qubits in $\ket0$ longer changed $\E[S]$ by $-1.4\%$ to
-        $+0.1\%$, so it was removed.
+  \item \textbf{Read the scoring rule before optimizing.} The score is dominated by a handful of
+        small cases, and for those, balance matters more than raw gate count.
+  \item \textbf{Cheap exact circuits come from search, not from textbooks,} but only up to about
+        nine qubits.
+  \item \textbf{Hardware quality varies,} so choosing qubits is an optimization problem of its own.
+  \item \textbf{Limits.} Our simulator ignores crosstalk, slow drift and systematic rotation errors,
+        so real hardware will score lower than these numbers.
 \end{itemize}
 
 \bibliographystyle{abbrv}
