@@ -12,6 +12,29 @@ experiments/results/*.npz
 experiments/results/*.log
 experiments/results/**/*.log
 
+# Manim scratch output (finished renders are copied to figures/anim/)
+animations/media/
+
 # Local tooling
 graft/
 .ignore
+# LaTeX temporary files
+*.aux
+*.log
+*.toc
+
+# Latexmk
+*.fdb_latexmk
+
+# SyncTeX
+*.synctex.gz
+
+# LaTeX Beamer
+*.snm
+*.vrb
+*.nav
+*.out
+
+# BibTeX
+*.bbl
+*.blg

@@ -82,8 +82,8 @@ create_dicke_state(N, n, calibration)
 
 On the hardware track, k = 2 at N = 6–8 goes to Bryan before `_SYNTH` is consulted, and every
 other k ≥ 2 case up to N = 8 has a `_SYNTH` entry, so SCS and routed B-E run there only as
-fallbacks. They are the main path for N > 20; the bonus entry has its own candidate set
-(section 5).
+fallbacks. `_SCS` holds blocks for m ≤ 20 only, so beyond N = 20 the fallback after Bryan's builder
+is routed B-E; the bonus entry has its own candidate set (section 5).
 
 The Dicke state is permutation-symmetric, so we return wherever the logical qubits end up.
 Routing permutations never need undoing.
@@ -365,7 +365,7 @@ scorer, section 6).
   | 6 | 103, 116, 124, 134 (N = 12…15) |
   | 7 | 133, 144 (N = 14, 15) |
 
-  What is left is the k ≥ 5 family (12 cases, 8.5 points): their arms carry every weight up to
+  What is left is the k ≥ 5 family (12 cases, 8.0 of the 44.47 points): their arms carry every weight up to
   the arm length, and no exact block beyond U₄ r≤4 was found for them. The thermometer order never changed a winner (bottom-up always won); putting
   the thermometer on the non-critical arm did, by 2–6 moments.
 - k = 2: a *partial* tail does not beat the 4-CZ top blocks (U₃ r≤2 15 vs 13, U₄ r≤2 19 vs 19),

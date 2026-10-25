@@ -1,0 +1,73 @@
+{
+ "stats": {
+  "raw": {
+   "sq": 777,
+   "cz": 147,
+   "moments": 125,
+   "sq_err": 0.3325898444924631,
+   "cz_err": 0.27247718869778104
+  },
+  "merged": {
+   "sq": 276,
+   "cz": 147,
+   "moments": 125,
+   "sq_err": 0.11403434327512417,
+   "cz_err": 0.27247718869778104
+  },
+  "dd": {
+   "sq": 424,
+   "cz": 147,
+   "moments": 125,
+   "sq_err": 0.1778508907213094,
+   "cz_err": 0.27247718869778104
+  }
+ },
+ "qubits": [
+  [
+   5,
+   8
+  ],
+  [
+   6,
+   8
+  ],
+  [
+   7,
+   8
+  ],
+  [
+   8,
+   8
+  ]
+ ],
+ "timelines": {
+  "raw": [
+   "scs.s.s.s.s.s.s.s.s.s.s.scscs.scs.s.s.s.s.scs.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s..",
+   "scscs.s.s.s.s.scscs.scs.scscscscscs.s.s.s.scscs.scs.s.s.s.s.scs.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s",
+   "..scscs.scscs.scscscscscscs.scs.scscs.scs.scscscscscs.s.s.s.scscs.scs.s.s.s.s.scs.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s.s",
+   "....scsc.cscscscs.scs.scs.s.scs.scscscscscscs.scs.scscs.scs.scscscscscs.s.s.s.scscs.scs.s.s.s.s.scs.s.s.s.s.s.s.s.s.s.s.s.s.s"
+  ],
+  "merged": [
+   "sc.......................csc..sc..........sc..............................................................................s..",
+   "scsc...........csc..sc..scscscscsc........scsc..sc..........sc..............................................................s",
+   "..scsc...csc..scscscscscsc...c...csc..sc..scscscscsc........scsc..sc..........sc............................................s",
+   "....scsc.cscscsc..sc...c....sc..scscscscscsc...c...csc..sc..scscscscsc........scsc..sc..........sc..........................s"
+  ],
+  "dd": [
+   "sc..s.....s.....s.....s..csc..scs.s...s.s.sc........s...................s...................s...................s.........s..",
+   "scscs...s.s...scsc..sc..scscscscscs.s.s.s.scsc..scs.s...s.s.sc......s...............s...............s...............s.......s",
+   "..scsc...csc..scscscscscsc...c...csc..sc..scscscscscs.s.s.s.scsc..scs.s...s.s.sc....s...........s.........s...........s.....s",
+   "....scsc.cscscsc..sc...c....sc..scscscscscsc...c...csc..sc..scscscscscs.s.s.s.scsc..scs.s...s.s.sc..s.....s.......s.....s...s"
+  ]
+ },
+ "others": {
+  "D^{10}_5": [
+   371,
+   230
+  ],
+  "D^9_4": [
+   286,
+   170
+  ]
+ }
+}
