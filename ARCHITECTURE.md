@@ -434,6 +434,24 @@ D¹²₆ (102 vs 103) and loses every k ≥ 3 case at N ≥ 10 (D¹⁵₃ 74 vs 
 are whole-state circuits from the Bridges-2 synthesis runs; those are now candidates in our entry
 (section 2), which takes the per-case minimum: 44.47.
 
+**Teammates' combined notebooks, Sun 08:00 ET** (`origin/main` `DuQuantum_submission_BEST_OF_BOTH.ipynb`
+and `origin/tanish` `DuQuantum_submission_FINAL_v2.ipynb`; same bonus cell, different hardware
+cell). Bonus with the notebook's scorer: **44.27** vs our 44.47; it is shallower only on D¹²₆
+(102 vs 103) and deeper on D⁷₂, D⁸₂, D⁸₄, D¹⁰₂ by 1–2 moments. Hardware cell, 1/E[z + x] on 3
+calibrations (`vs_v2_focus_*.csv`; its N ≥ 9 builder is Aanha's, same gate counts as the
+preliminary combined submission):
+
+| case | ours, gate / idle | v2, gate / idle |
+|---|---|---|
+| D⁹₃ | **0.806 / 0.669** | 0.761 / 0.619 |
+| D⁹₄ | **0.724 / 0.536** | 0.691 / 0.521 |
+| D¹⁰₃ | **0.776 / 0.639** | 0.722 / 0.582 |
+| D¹⁰₄ | **0.681 / 0.511** | 0.621 / 0.463 |
+| D¹⁰₅ | **0.603 / 0.421** | 0.582 / 0.413 |
+
+Decision (Richard, 08:15 ET): our `main.py` / `submission.ipynb` supersedes; nothing further is
+merged (the one D¹²₆ moment is worth 0.007 points).
+
 **What did not work:**
 - **Whole-state re-synthesis at N = 9–10** (`synth.py`, overnight, 24 workers, stopped): best
   exact circuits D9,2 33 CZ, D10,2 35, D9,4 98, D9,3 136, vs 27, 31, 63, 50 deployed.

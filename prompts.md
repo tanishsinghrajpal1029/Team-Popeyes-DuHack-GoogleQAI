@@ -540,3 +540,22 @@ re-exported `_BONUS_SYNTH`: bonus **44.47**. Adopted three of them for the hardw
 (D⁷₃ 18 CZ, D⁸₃ 30, D⁸₄ 26) after measuring on 3 calibrations; kept ours where the fewer-CZ
 circuit measured worse or lost a robust angle pick. Regenerated and benchmarked
 `submission.ipynb`, updated ARCHITECTURE/README/CLAUDE/writeup, committed and pushed `richard`.)
+
+### Prompts 53–58 (Sun Oct 25, 08:00–08:15 ET)
+
+> also benchmark DuQuantum_submission_FINAL_v2.ipynb, tanish's new submission. then after we
+> should plan to merge the best of both if needed, or default to tanish's
+
+> the v2 should exist in the local directory / (path on the laptop) / wait its not on local, i
+> forgot we're in VM. i added the v2 into tanish branch
+
+> etas? / why is ETA 40min? ideally we need this to be done in the next ~15min
+
+> based on the v2 score we should determine if it is worth combining or rather just superseding
+
+(Work: benchmarked `origin/main` `DuQuantum_submission_BEST_OF_BOTH.ipynb` and `origin/tanish`
+`DuQuantum_submission_FINAL_v2.ipynb` (same bonus cell): bonus 44.27 vs our 44.47 with the
+notebook's scorer (56 cases, all exact); hardware cell vs ours on D⁹₃, D⁹₄, D¹⁰₃, D¹⁰₄, D¹⁰₅ under
+gate and idle noise, 3 calibrations: ours ahead on every case by 2–10% (ARCHITECTURE.md section 6).
+To meet the 15-minute budget the full-range comparison and the standard-track notebook benchmark
+were stopped and only the organizer's cases were run. Decision: ours supersedes; nothing merged.)
