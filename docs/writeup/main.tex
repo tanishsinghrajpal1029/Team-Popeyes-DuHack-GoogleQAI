@@ -229,7 +229,7 @@ are mapped coherently. The CZ pattern is pruned once per $k$, and the angles are
 $m$. The whole B-E circuit is then nearest-neighbour on a path and needs no routing. Inner blocks
 cost 2, 4, 12, 17 and 29 CZ for $k=1,\dots,5$, so $\D N2$ costs about $4N$ CZ
 (\file{experiments/scs\_synth.py}). On the hardware track these circuits are a fallback; they are
-the main path for our bonus entry and for $N>20$.
+the main path for $N>20$.
 
 \section{Placement: the cost is $\log\E[z]$}
 
@@ -310,6 +310,29 @@ total and 185.5 of the perfect-state total, which is why Section~\ref{sec:score}
 \textbf{Limits.} Not modeled: coherent errors (studied separately in Section~\ref{sec:synth}), ZZ crosstalk,
 leakage, per-qubit $T_1$ spread and drift. $T_\varphi$ and layer durations are assumed. Real
 hardware will score lower.
+
+\section{Bonus track: depth only}\label{sec:bonus}
+
+The bonus scores $\sum_{N\le15,\,n\le N/2} Nn/\text{moments}$ with no noise. The organizers'
+first-round feedback put our entry at 37.15 against a leader at 41.10; all 56 cases were exact,
+so the gap was depth. Three facts fixed the design. (i) \texttt{Willow105.validate\_circuit}
+rejects classically controlled operations, so a feedforward circuit would fail the validator the
+judges are told to use: the entry is unitary. (ii) A split circuit has $2\cdot(\text{CZ depth})+1$
+moments and the CZ depth is set by the B-E sweep: each arm position costs about 18 moments at
+$k\ge5$ (10 at $k=3$, 5 at $k=2$), and the sweeps for the last few positions of an arm run on the
+same qubits with nothing in parallel. (iii) Those sweeps implement a small Dicke unitary,
+$U_{m_0}\colon\ket{0^{m_0-r}1^r}\mapsto\ket{\D{m_0}r}$ for $r\le\min(k,m_0)$, an isometry we can
+synthesize exactly with the batch fitter of Section~\ref{sec:synth}, fewest layers first
+(\file{experiments/tail\_synth.py}). Replacing the whole arm by one block when a block exists
+($U_7$ with $r\le2$: 27 moments against a 37-moment sweep arm; $U_6$ with $r\le4$: 43 against 97)
+and the last 4--7 positions otherwise, choosing the arm that carries the thermometer, and porting
+a teammate's staggered W tree (one to two moments shallower at $N\ge5$) gives
+\textbf{43.65}. Per case: $\D{12}4$ 88 $\to$ 51, $\D{13}2$ 40 $\to$ 31, $\D{15}2$ 46 $\to$ 35,
+$\D{15}7$ 160 $\to$ 144, $W_9$ 14 $\to$ 12. What remains is $k\ge5$ (12 cases, 8.5 points), whose
+arms carry every weight up to the arm length; no exact block beyond $U_4$ with $r\le4$ was found
+for them. Synthesis from scratch (Givens-only, 2D patches, complex single-qubit layers) and
+divide-and-conquer beyond two arms were also tried and did not help (\file{ARCHITECTURE.md},
+Sections 5--6).
 
 \section{What did not work}
 
