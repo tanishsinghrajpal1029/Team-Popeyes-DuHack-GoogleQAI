@@ -390,15 +390,95 @@ measure only the deployed angles, or parallelize the restarts.)
 (`vqe_coherent_8_3_cz31.csv`). It came out close to the old pick (λ 107 vs 86 uniform, 86 vs 112
 per-qubit), so the export was kept. It then regenerated the golden file and the notebook.)
 
-### Prompt 41
+### Prompt 41 (plan mode; model: Claude Fable 5.1)
 
-> I want to run a comprehensive cleanup of @main.py so it's easier to read and shorter in length. Plan it.
+> /plan I want to make a latex writeup documenting the important mathematical choices behind our
+> project submission. Create a plan on the most important ideas to write about and how to describe
+> them.
 
-(Plan mode. The assistant asked two scope questions. Answers: *behavior?* → "Behavior-preserving
-(Recommended)"; *edit the vendored section?* → "Edit freely (Recommended)". It then implemented
-the approved plan: entry points first, then our constructions, then Bryan's, with the data
-tables at the end. It added shared constants and helpers (`_readout`, `_imbalance_penalty`,
-`finish`, `_routed_bartschi_eidenbenz`), merged `beam_paths`/`extend_path` into `_grow_paths`,
-removed the dead k = 1 branch of `generate_candidates`, and trimmed the restating comments.
-Checked by hashing every returned circuit before and after: hardware N ≤ 15 on 3 calibrations,
-every `build()` switch, every bonus case. All 726 were identical; bonus score 37.154.)
+Clarifying questions from the assistant, and Richard's answers:
+
+- *How long and for whom?* → "Appendix-style, ~3 pages".
+- *Include Bryan's building-block derivations?* → "Brief summary only".
+- *How to build the PDF (no LaTeX on the machine)?* → "Write .tex only, I compile in Overleaf
+  (Recommended)".
+
+Then: "Save the plan - I'll use it in a bit".
+
+### Prompt 42 (model: Claude Opus 5.5)
+
+> Execute from the plan file
+
+(The assistant wrote `docs/writeup/main.tex` and `refs.bib` and copied two existing figures. The
+document covers the score's heavy tail and the imbalance noncentrality, the complement and
+permutation reductions, the W tree, whole-state synthesis and the robust angle pick, B-E with
+synthesized SCS blocks, the placement cost read as log E[z], compilation, a summary of Bryan's
+constructions, a results table and negative results. It checked the closed forms against
+`scoring.expected_score`, checked the over-rotation versus phase-error orders on the deployed D4,2
+circuit, and traced every number in the document to ARCHITECTURE.md, a summarized CSV, or that
+check. No local LaTeX build was run.)
+
+### Prompt 43 (model: Claude Opus 5.5)
+
+> can you regenerate and benchmark the new submission.ipynb with its scoring functions for both
+> the base problem and the bonus question?
+
+(The assistant regenerated and executed the notebook with `make_notebook.py --run`. The output was
+byte-identical to the committed file, and every sanity case passed. It then wrote
+`experiments/bench_notebook.py`, which runs the notebook's own cells and scores with the
+notebook's own functions. Standard track: 25 cases (N ≤ 10) × calibration seeds 0–2, idle noise,
+1,000 sampled 10k-shot Z/X runs per case through the verbatim `overall_score`. All 75 builds were
+exact and valid, and the verbatim and fast scorers agreed to 1e-14 on identical shots.
+Σ median 27.64 and Σ E[score] 101.8 agree with ARCHITECTURE.md (27.9 / 102.0) within W₂
+sampling noise. The judged total (one run per case, summed) has median 36.4, p10–p90 26.3–142,
+and mean 100.8. Bonus: the notebook's `score_solution`, with a `validate_circuit` written from
+the bonus text (the notebook never defines one), gave 37.1542 over 56 cases. All were exact and
+routed, with no measurements, and the slowest build took 7.7 s. Results are in
+`notebook_standard.csv`, `notebook_standard_totals.csv` and `notebook_bonus.csv`.)
+
+## Session 5 — Sat Oct 24, 2026, ~10:10 PM EDT (Sun 02:10 UTC)
+
+### Prompt 44 (plan mode; model: Claude Fable 5.1)
+
+> /plan Your solution is tied for 3rd place out of the five submissions I have received so far.
+> For the bonus question, your score is 37.1542. The highest score for the bonus question among
+> the solutions I have received is 41.1036.
+
+(The organizer's message, pasted as the planning brief. The assistant reproduced 37.1542 from
+`notebook_bonus.csv`, then measured, read-only: `Willow105.validate_circuit` rejects classically
+controlled gates (measurement alone passes); Givens-only, 2D-patch and complex-layer brickwork
+synthesis all stall at N ≈ 8; the deployed split circuits are 2·(CZ depth)+1 moments with a
+strictly serial 41-moment arm tail; depth-minimal replacements for that tail save 8–10 moments.
+It asked how to spend the time given a realistic +1 to +1.5 points.)
+
+### Prompt 45 (mid-plan question)
+
+> is the gap just an accuracy gap on the n <= 8 cases or is it one where we are missing actual
+> cases where 8 <= n <= 15
+
+(Answer: no missing cases; all 56 are present and exact. 12.1 points come from N ≤ 8, 25.0 from
+N ≥ 9; the W states are at the Givens-tree floor, so the leader's edge is in k ≥ 2 depth.)
+
+Clarifying question from the assistant, and Richard's answer:
+
+- *Time-boxed micro-wins (~2.5 h, then deliverables) / deliverables only / all-in on the bonus?*
+  → "Time-boxed micro-wins (Recommended)". Plan approved.
+
+### Prompt 46 (during execution)
+
+> did we also incorporate tanish branch optimal stuff
+
+(The assistant ran the preliminary combined submission (commit 1995558) and the `origin/Aanha`
+branch on all 56 bonus cases: 33.7 and 32.4 in total, but shallower than ours on W₅–W₁₅ by 1–2
+moments and on D¹⁰₅/D¹²₆/D¹⁴₇ by 3–5. It ported Aanha's broadcast W tree into the bonus
+candidate set with attribution; the half-filling cases were already beaten by the new split
+variants. Outcome of the session: `score_solution` 37.15 → 40.59, all cases exact, routed and
+whitelisted, hardware path unchanged (golden test passes). Details: ARCHITECTURE.md section 5.)
+
+### Prompt 47 (new session after a restart)
+
+> can u push the current and continue
+
+(The assistant exported the finished tail blocks (U₄ r≤4 29 moments, U₆ r≤4 43), re-ran the
+bonus benchmark (40.59), regenerated and executed `submission.ipynb`, re-benchmarked it with the
+notebook's `score_solution`, updated ARCHITECTURE.md, and committed and pushed branch `richard`.)

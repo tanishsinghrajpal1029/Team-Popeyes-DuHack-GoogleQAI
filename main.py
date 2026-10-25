@@ -4,16 +4,12 @@ Only cirq, cirq_google, their dependencies (numpy, networkx, and scipy, imported
 _expected_score) and the standard library are imported, as the challenge requires.
 
 build() is a measured portfolio. With k = min(n, N - n):
-  k = 2 with N >= 6, or k >= 3 with N >= 9   Bryan's solution (second half of this file)
-  k = 0                                      product state on the best-readout qubits
-  k = 1, N = 2                               W pair chosen by simulating every placement
-  k = 1                                      W broadcast tree
-  (N, k) in _SYNTH                           whole-state synthesized circuit, placed on chip
-  k <= 5                                     Baertschi-Eidenbenz from synthesized SCS blocks
-  otherwise                                  Baertschi-Eidenbenz (arXiv:1904.07358), routed
+  - k = 2 with N >= 6, or k >= 3 with N >= 9: Bryan's vendored solution (bottom of this file);
+  - otherwise ours: product state (k = 0), W broadcast tree (k = 1), whole-state synthesized
+    circuits (_SYNTH, N <= 8), Baertschi-Eidenbenz from synthesized SCS blocks (_SCS, k <= 5),
+    and routed Baertschi-Eidenbenz (arXiv:1904.07358) as the last resort.
 For n > N/2 we prepare D_{N-n} and flip every qubit. The Dicke state is permutation-symmetric,
-so wherever placement or routing leaves the logical qubits is a valid answer. The synthesized
-tables (_SYNTH, _SCS) are at the end of the file.
+so wherever placement or routing leaves the logical qubits is a valid answer.
 """
 
 import heapq
@@ -26,214 +22,12 @@ import networkx as nx
 import numpy as np
 
 
-# Layer durations (s); the calibration data has no timing information.
-T_1Q = 25e-9
-T_CZ = 42e-9
-
 # Only attempt the second routing variant if the first finished within this many seconds,
 # so the 60 s build limit holds with a wide margin on slower machines.
 _SECOND_TRY_BUDGET_S = 10.0
 
-# Native pulses: X flips qubits (complement trick, product states); X and Y echo idle windows.
-_X = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0)
-_Y = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0.5)
 
-# 2x2 matrices
-_I2 = np.eye(2, dtype=complex)
-_MX = np.array([[0, 1], [1, 0]], dtype=complex)
-_MY = np.array([[0, -1j], [1j, 0]], dtype=complex)
-_MZ = np.array([[1, 0], [0, -1]], dtype=complex)
-_H = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)
-_S = np.diag([1, 1j]).astype(complex)  # S = sqrt(Z)
-
-
-# =============================================================================================
-# Entry points
-# =============================================================================================
-
-
-def create_dicke_state(
-    num_qubits: int,
-    num_excitations: int,
-    cz_pauli_error_rate: dict[
-        tuple[cirq.GridQubit, cirq.GridQubit], tuple[float, float]
-    ],
-    sq_pauli_error_rate: dict[cirq.GridQubit, tuple[float, float]],
-    zero_errors: dict[cirq.GridQubit, tuple[float, float]],
-    one_errors: dict[cirq.GridQubit, tuple[float, float]],
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    """Create a Cirq circuit that produces a Dicke state.
-
-    Args:
-        num_qubits: The number, N, of qubits in the Dicke state.
-        num_excitations: The number, n, of 1s in the state.
-        cz_pauli_error_rate: Measured CZ Pauli error rates and their statistical uncertainties.
-        sq_pauli_error_rate: Measured single-qubit Pauli error rates and their statistical uncertainties.
-        zero_errors: Measured parallel 0 -> 1 readout error rates and their statistical uncertainties.
-        one_errors: Measured 1 -> 0 readout error rates and their statistical uncertainties.
-
-    Returns:
-        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
-
-    Raises:
-        NotImplementedError: The requested (N, n) combination is not implemented.
-    """
-    return build(
-        num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
-        zero_errors, one_errors,
-    )
-
-
-def create_dicke_state_adaptive(
-    num_qubits: int, num_excitations: int
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    """Create a Cirq circuit that produces a Dicke state, allowing for adaptive circuits.
-
-    This entry is not adaptive yet: it returns the shallower of our exact unitary
-    construction (uniform calibration, packed for depth) and Bryan's bonus solution.
-    Every measurement branch is trivially exact because there are no measurements.
-
-    Args:
-        num_qubits: The number, N, of qubits in the Dicke state.
-        num_excitations: The number, n, of 1s in the state.
-
-    Returns:
-        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
-
-    Raises:
-        NotImplementedError: The requested (N, n) combination is not implemented.
-    """
-    N, n = int(num_qubits), int(num_excitations)
-    ours, qs = build(N, n, **_uniform_calibration(), dd=False, bryan=False)
-    best = (_pack(ours), qs)
-    try:  # Bryan's bonus solution is shallower for most cases: keep whichever is shallower
-        theirs = _bryan_create_dicke_state_adaptive(N, n)
-        if len(theirs[0]) < len(best[0]):
-            best = theirs
-    except NotImplementedError:
-        pass
-    return best
-
-
-def build(
-    num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
-    zero_errors, one_errors, *, w_tree: bool = True, synth: bool = True,
-    scs: bool = True, tiny: bool = True, dd: bool = True, bryan: bool = True,
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    """`create_dicke_state` with switches for the experiments (defaults = submission)."""
-    N, n = int(num_qubits), int(num_excitations)
-    if N < 1 or not 0 <= n <= N:
-        raise NotImplementedError(f"invalid (N, n) = ({N}, {n})")
-    cal = (cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors)
-    if bryan and _bryan_wins(N, n):
-        try:
-            return _bryan_create_dicke_state(N, n, *cal)
-        except Exception:  # any failure there: fall back to our constructions below
-            pass
-    circuit, qubits = _build_core(N, n, *cal, w_tree=w_tree, synth=synth, scs=scs, tiny=tiny)
-    return (_add_dd(circuit) if dd else circuit), qubits
-
-
-def _bryan_wins(N: int, n: int) -> bool:
-    """Where Bryan's constructions measured better (experiments/results/vs_bryan.csv,
-    25 cases x 3 calibrations, idle noise): k = 2 for N >= 6 (1-7% higher median score; ~3
-    fewer CZ) and k >= 3 for N >= 9 (21-39%; the split B-E halves the CZ count). Ours win the
-    W states, k = 2 up to N = 5 and k >= 3 up to N = 8 (whole-state synthesis, up to +28%)."""
-    k = min(n, N - n)
-    return (k == 2 and N >= 6) or (k >= 3 and N >= 9)
-
-
-def _build_core(
-    N, n, cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors, *,
-    w_tree: bool, synth: bool, scs: bool, tiny: bool,
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    flip = n > N - n  # D^N_n = X^N D^N_{N-n}: prepare the lighter one
-    k = N - n if flip else n
-    node_cost = {
-        q: _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N)
-        for q in sq_pauli_error_rate
-    }
-
-    def finish(logical, qubits):
-        if flip:
-            logical.append(cirq.X.on_each(*qubits))
-        return _to_cz_phxz(logical), set(qubits)
-
-    if k == 0:  # product state: |0...0> or |1...1>
-        qubits = sorted(node_cost, key=node_cost.get)[:N]
-        if len(qubits) < N:
-            raise NotImplementedError("not enough calibrated qubits")
-        return cirq.Circuit([_X.on(q) for q in qubits] if flip else []), set(qubits)
-
-    g = _usable_graph(cz_pauli_error_rate, sq_pauli_error_rate)
-
-    # Measured (experiments/results/tiny.csv): for W2 this raises E[score] 60.2 -> 65.6 while
-    # the median dips 4.37 -> 4.16; for W3 it gains nothing, so only N = 2 uses it.
-    if k == 1 and w_tree and tiny and N == 2:
-        picked = _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate,
-                              zero_errors, one_errors)
-        if picked is not None:
-            return picked
-
-    if k == 1 and w_tree:
-        tree_cost = {  # a tree node receives ~4 non-virtual single-qubit gates
-            q: _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N, n_sq=4)
-            for q in sq_pauli_error_rate
-        }
-        tree = _best_w_tree(g, N, tree_cost, zero_errors, one_errors)
-        if tree is not None:
-            root, rounds = tree
-            qubits = {root} | {c for r in rounds for _, c in r}
-            return finish(_w_tree_circuit(root, rounds), sorted(qubits))
-
-    scs_cz = _scs_cz_count(N, k) if scs else None
-    synth_entry = _SYNTH.get((N, k)) if synth else None
-    if synth_entry is not None and (scs_cz is None or sum(map(len, synth_entry["cz_layers"])) <= scs_cz):
-        qs = _place_synth(g, synth_entry, n, sq_pauli_error_rate, zero_errors, one_errors)
-        if qs is not None:
-            return finish(_synth_circuit(synth_entry, qs), qs)
-
-    if scs_cz is not None:
-        paths = _best_path(g, N, node_cost, edge_weight=scs_cz / (N - 1), keep=16)
-        if paths:
-            _, path = min(paths, key=lambda t: t[0] + _imbalance_penalty(
-                t[1], n, t[0], zero_errors, one_errors))
-            return finish(_scs_circuit(N, k, path), path)
-
-    return _routed_bartschi_eidenbenz(g, N, k, flip, node_cost)
-
-
-# ---- bonus track helpers ----------------------------------------------------------------------
-
-
-def _uniform_calibration() -> dict:
-    """The bonus provides no error rates: every Willow105 qubit and coupler, equal rates
-    (typical values, so the layout searches weigh CZ, 1q gates and readout as on hardware)."""
-    qubits = sorted(cirq_google.Willow105.metadata.qubit_set)
-    pairs = [tuple(sorted(p)) for p in cirq_google.Willow105.metadata.qubit_pairs]
-    return dict(
-        cz_pauli_error_rate={p: (2.5e-3, 0.0) for p in pairs},
-        sq_pauli_error_rate={q: (4e-4, 0.0) for q in qubits},
-        zero_errors={q: (5e-3, 0.0) for q in qubits},
-        one_errors={q: (1e-2, 0.0) for q in qubits},
-    )
-
-
-def _pack(circuit: cirq.Circuit) -> cirq.Circuit:
-    """Fewest moments: merge single-qubit runs, then re-insert every operation as early as
-    possible (single-qubit gates may share a moment with CZs; depth is all that is scored)."""
-    c = cirq.merge_single_qubit_gates_to_phxz(circuit)
-    return pack_earliest(cirq.drop_empty_moments(cirq.drop_negligible_operations(c)))
-
-
-def pack_earliest(circuit: cirq.Circuit) -> cirq.Circuit:
-    """Re-insert every operation at the earliest moment its qubits allow (mixed 1q/CZ moments)."""
-    return cirq.Circuit(circuit.all_operations(), strategy=cirq.InsertStrategy.EARLIEST)
-
-
-# =============================================================================================
-# Calibration costs and layout search
-# =============================================================================================
+# ---- calibration graph ----------------------------------------------------------------
 
 
 def _robust(v) -> float:
@@ -250,12 +44,6 @@ def _robust(v) -> float:
         return float(v)
 
 
-def _readout(q, zero_errors, one_errors, robust: bool = True) -> tuple:
-    """(0 -> 1, 1 -> 0) readout errors of q, robust or raw means; missing entries count as 0.5."""
-    e0, e1 = zero_errors.get(q, (0.5, 0)), one_errors.get(q, (0.5, 0))
-    return (_robust(e0), _robust(e1)) if robust else (e0[0], e1[0])
-
-
 def _usable_graph(cz_pauli_error_rate: dict, sq_pauli_error_rate: dict) -> nx.Graph:
     """Calibrated couplers whose endpoints both have single-qubit calibrations."""
     g = nx.Graph()
@@ -269,21 +57,9 @@ def _usable_graph(cz_pauli_error_rate: dict, sq_pauli_error_rate: dict) -> nx.Gr
 def _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, p_one: float, n_sq: float = 1) -> float:
     """Expected per-qubit error: readout weighted by how often the qubit reads 1, plus
     `n_sq` single-qubit gates."""
-    e0, e1 = _readout(q, zero_errors, one_errors)
+    e0 = _robust(zero_errors.get(q, (0.5, 0)))
+    e1 = _robust(one_errors.get(q, (0.5, 0)))
     return (1 - p_one) * e0 + p_one * e1 + n_sq * _robust(sq_pauli_error_rate[q])
-
-
-def _imbalance_penalty(qubits: list, n: int, cost: float, zero_errors, one_errors) -> float:
-    """log(1 + lambda / (K - 1)) for the chi^2 noncentrality lambda caused by readout alone,
-    at right-weight fraction f = exp(-cost). A valid string x survives readout with relative
-    weight ~ exp(-sum_{i in x} (e1_i - e0_i)), so its spread over random n-subsets is
-    n (N-n)/(N-1) var(e1 - e0)."""
-    N = len(qubits)
-    if N < 2:
-        return 0.0
-    d = np.array([e1 - e0 for e0, e1 in (_readout(q, zero_errors, one_errors, robust=False) for q in qubits)])
-    lam = 1e4 * math.exp(-cost) * n * (N - n) / (N - 1) * float(np.var(d))
-    return math.log1p(lam / max(math.comb(N, n) - 1, 1))
 
 
 def _best_path(g: nx.Graph, length: int, node_cost: dict, beam: int = 256,
@@ -328,18 +104,25 @@ def _connected_patch(g: nx.Graph, size: int, node_cost: dict) -> list | None:
     return None
 
 
-# =============================================================================================
-# Our constructions
-# =============================================================================================
-
 # ---- W state (n = 1): broadcast tree of amplitude splits ------------------------------
 
 # Idle-error model for layout decisions. The calibration data has no T1/T2, so we use
 # the Willow spec-sheet T1 (68 us) and an assumed T_phi (100 us). One tree round is
-# 2 CZ layers + 2 single-qubit layers. A W state carries exactly one excitation in every
-# branch, so its idle loss per round is independent of N.
-_ROUND_NS = round((2 * T_CZ + 2 * T_1Q) * 1e9)
+# 2 CZ layers (42 ns) + 2 single-qubit layers (25 ns). A W state carries exactly one
+# excitation in every branch, so its idle loss per round is independent of N.
+_ROUND_NS = 2 * 42 + 2 * 25
 _IDLE_RATE_PER_NS = 1 / 68e3 + 1 / 100e3
+
+
+def _readout_lambda(qubits: list, zero_errors, one_errors, n: int, f: float) -> float:
+    """Chi^2 noncentrality from readout alone: a valid string x survives readout with
+    relative weight ~ exp(-sum_{i in x} (e1_i - e0_i)), so its spread over random
+    n-subsets is n (N-n)/(N-1) var(e1 - e0)."""
+    N = len(qubits)
+    if N < 2:
+        return 0.0
+    d = np.array([one_errors.get(q, (0.5, 0))[0] - zero_errors.get(q, (0.5, 0))[0] for q in qubits])
+    return 1e4 * f * n * (N - n) / (N - 1) * float(np.var(d))
 
 
 def _grow_tree(g: nx.Graph, root, N: int, node_cost: dict):
@@ -400,7 +183,8 @@ def _best_w_tree(g, N, node_cost, zero_errors, one_errors):
             if rounds is None:
                 continue
             cost += len(rounds) * _ROUND_NS * _IDLE_RATE_PER_NS
-            cost += _imbalance_penalty(list(S), 1, cost, zero_errors, one_errors)
+            lam = _readout_lambda(list(S), zero_errors, one_errors, 1, math.exp(-cost))
+            cost += math.log1p(lam / (N - 1))
             if cost < best_cost:
                 best, best_cost = (root, rounds), cost
     return best
@@ -442,7 +226,7 @@ def _w_tree_circuit(root, rounds: list) -> cirq.Circuit:
 # afford to simulate every placement exactly (gate depolarizing + readout, from the
 # calibration dicts) and pick the one with the highest predicted E[score].
 
-_PAULIS = [_MX, _MY, _MZ]
+_PAULIS = [np.array(m, dtype=complex) for m in ([[0, 1], [1, 0]], [[0, -1j], [1j, 0]], [[1, 0], [0, -1]])]
 
 
 def _embed(mats: dict, N: int) -> np.ndarray:
@@ -494,8 +278,6 @@ def _expected_score(K: int, f: float, lam: float, x: float, exact: bool) -> floa
 
 
 def _predict_tiny(steps, phys, n, cz_err, sq_err, zero_errors, one_errors, exact, shots=10_000):
-    """Predicted E[score] of one placement: exact density-matrix simulation with depolarizing
-    gate noise and readout confusion, then the judges' Z and X terms."""
     N = len(phys)
     rho = np.zeros((2**N, 2**N), dtype=complex)
     rho[0, 0] = 1
@@ -510,7 +292,7 @@ def _predict_tiny(steps, phys, n, cz_err, sq_err, zero_errors, one_errors, exact
     for r in (rho, h @ rho @ h):
         pr = np.real(np.diag(r)).reshape((2,) * N)
         for j, q in enumerate(phys):  # readout confusion, [read, true]
-            e0, e1 = _readout(q, zero_errors, one_errors)
+            e0, e1 = _robust(zero_errors.get(q, (0.5, 0))), _robust(one_errors.get(q, (0.5, 0)))
             conf = np.array([[1 - e0, e1], [e0, 1 - e1]])
             pr = np.moveaxis(np.tensordot(conf, pr, axes=([1], [j])), 0, j)
         probs.append(pr.reshape(-1))
@@ -550,7 +332,6 @@ def _tiny_candidates(g: nx.Graph, N: int):
 
 
 def _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors):
-    """Rank every placement by the fast closed form, then re-rank the top 10 exactly."""
     cz_err = {frozenset(p): _robust(v) for p, v in cz_pauli_error_rate.items()}
     sq_err = {q: _robust(v) for q, v in sq_pauli_error_rate.items()}
     programs, scored = {}, []
@@ -570,100 +351,7 @@ def _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate, zero_e
     return compiled.transform_qubits(lambda q: mapping[q]), set(best[2])
 
 
-# ---- small cases: numerically synthesized exact circuits ----------------------------------
-#
-# For small (N, k) we embed exact Ry + CZ circuits found offline by experiments/synth.py
-# (gradient optimization to infidelity < 1e-13, then greedy CZ pruning), stored in _SYNTH at
-# the end of this file. They depend only on a layout shape (grid coordinates), never on
-# calibration data; where to put the shape is decided here at build time. Synthesis itself
-# takes minutes per case, far over the 60 s build budget, which is why the result is cached.
-
-_GRID_SYMMETRIES = (
-    lambda r, c: (r, c), lambda r, c: (r, -c), lambda r, c: (-r, c), lambda r, c: (-r, -c),
-    lambda r, c: (c, r), lambda r, c: (c, -r), lambda r, c: (-c, r), lambda r, c: (-c, -r),
-)
-
-
-def _place_synth(g, entry, n, sq_pauli_error_rate, zero_errors, one_errors):
-    """Best placement of a synthesized shape on calibrated qubits and couplers."""
-    coords = entry["coords"]
-    N = len(coords)
-    th = np.array(entry["params"]).reshape(-1, N)
-    ry_count = (np.abs(np.sin(th / 2)) > 1e-9).sum(axis=0)  # non-trivial rotations per qubit
-    uses = {}
-    for layer in entry["cz_layers"]:
-        for e in layer:
-            uses[tuple(e)] = uses.get(tuple(e), 0) + 1
-    usable = set(g.nodes)
-    best, best_cost = None, math.inf
-    for sym in _GRID_SYMMETRIES:
-        pts = [sym(r, c) for r, c in coords]
-        r0, c0 = pts[0]
-        for anchor in usable:
-            qs = [cirq.GridQubit(anchor.row + r - r0, anchor.col + c - c0) for r, c in pts]
-            if not all(q in usable for q in qs) or not all(g.has_edge(qs[i], qs[j]) for i, j in uses):
-                continue
-            cost = sum(u * g.edges[qs[i], qs[j]]["err"] for (i, j), u in uses.items())
-            cost += sum(
-                _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N, n_sq=ry_count[i])
-                for i, q in enumerate(qs)
-            )
-            cost += _imbalance_penalty(qs, n, cost, zero_errors, one_errors)
-            if cost < best_cost:
-                best, best_cost = qs, cost
-    return best
-
-
-def _synth_circuit(entry, qs) -> cirq.Circuit:
-    N = len(qs)
-    th = np.array(entry["params"]).reshape(-1, N)
-    moments = []
-    for l in range(len(th)):
-        moments.append(cirq.Moment(cirq.ry(th[l, i]).on(qs[i]) for i in range(N)))
-        if l < len(entry["cz_layers"]):
-            moments.append(cirq.Moment(cirq.CZ(qs[i], qs[j]) for i, j in entry["cz_layers"][l]))
-    return cirq.Circuit(moments)
-
-
-# ---- larger cases: B-E from synthesized nearest-neighbour SCS blocks ----------------------
-#
-# SCS_{m,k} acts on the k+1 consecutive line qubits m-k .. m, and its input is always a
-# sorted string |0^{w-l} 1^l> on that window. experiments/scs_synth.py finds exact Ry + CZ
-# circuits for these small isometries on a path (_SCS, end of file), so the whole B-E circuit
-# becomes nearest-neighbour on a line: no routing. Keys are (m, k, all_ones); all_ones marks
-# the second-group blocks SCS_{m,m-1}, m <= K, whose window can hold |1^m>.
-
-
-def _scs_blocks(N: int, K: int) -> list[tuple[int, int, bool]]:
-    return [(m, K, False) for m in range(N, K, -1)] + [(m, m - 1, True) for m in range(K, 1, -1)]
-
-
-def _scs_cz_count(N: int, K: int) -> int | None:
-    keys = _scs_blocks(N, K)
-    if not all(key in _SCS for key in keys):
-        return None
-    return sum(sum(map(len, _SCS[key][0])) for key in keys)
-
-
-def _scs_circuit(N: int, K: int, path: list) -> cirq.Circuit:
-    """U_{N,K} |0^{N-K} 1^K> = |D^N_K> on `path` (path[0] is B-E qubit 1).
-
-    Operations are appended in order with cirq's EARLIEST insertion, so consecutive
-    blocks overlap in time wherever their qubits allow (the paper's "pushed stairs").
-    """
-    ops = [cirq.X(q) for q in path[N - K:]]
-    for m, k, all_ones in _scs_blocks(N, K):
-        layers, params = _SCS[(m, k, all_ones)]
-        window = path[m - k - 1:m]
-        th = np.array(params).reshape(-1, k + 1)
-        for l in range(len(th)):
-            ops += [cirq.ry(th[l, i]).on(window[i]) for i in range(k + 1)]
-            if l < len(layers):
-                ops += [cirq.CZ(window[i], window[j]) for i, j in layers[l]]
-    return cirq.Circuit(ops)
-
-
-# ---- last resort: Baertschi-Eidenbenz logical circuit, routed ------------------------------
+# ---- Baertschi-Eidenbenz logical circuit ------------------------------------------------
 
 
 def _ccry(phi: float, c1, c2, t) -> list:
@@ -704,666 +392,61 @@ def _bartschi_eidenbenz(N: int, k: int) -> tuple[cirq.Circuit, list]:
     return cirq.Circuit(ops), q
 
 
-def _routed_bartschi_eidenbenz(g, N: int, k: int, flip: bool, node_cost: dict):
-    """B-E routed with cirq.RouteCQC onto a low-error path (or a connected patch).
-
-    Routing is chaotic: routing the raw CNOT/CRy circuit or a CZ-compiled one wins on
-    different calibrations (by up to ~30% CZ). Try both while time allows; keep the
-    one with fewer CZs. The raw variant goes first because it is the faster one.
-    """
-    layout = _best_path(g, N, node_cost) or _connected_patch(g, N, node_cost)
-    if layout is None:
-        raise NotImplementedError("no connected layout of the requested size")
-    logical, lq = _bartschi_eidenbenz(N, k)
-    if flip:
-        logical.append(cirq.X.on_each(*lq))
-    device = g.subgraph(layout).copy()
-    start = time.monotonic()
-    best = None
-    for precompile in (False, True):
-        if best is not None and time.monotonic() - start > _SECOND_TRY_BUDGET_S:
-            break
-        router = cirq.RouteCQC(device)
-        initial = cirq.HardCodedInitialMapper(dict(zip(lq, layout)))
-        source = _to_cz_phxz(logical) if precompile else logical
-        routed, initial_map, swap_map = router.route_circuit(source, initial_mapper=initial)
-        circuit = _to_cz_phxz(routed)
-        key = (sum(op.gate == cirq.CZ for op in circuit.all_operations()), len(circuit))
-        if best is None or key < best[0]:
-            best = (key, circuit, {swap_map[initial_map[q]] for q in lq})
-    return best[1], best[2]
-
-
-# ---- compilation and dynamical decoupling --------------------------------------------------
-
-
-def _to_cz_phxz(circuit: cirq.Circuit) -> cirq.Circuit:
-    """Compile to cirq.CZ + PhasedXZGate and drop global phases."""
-    # CZTargetGateset already merges single-qubit runs into PhasedXZ and drops negligible ops
-    c = cirq.optimize_for_target_gateset(circuit, gateset=cirq.CZTargetGateset())
-    c = cirq.drop_empty_moments(cirq.Circuit(
-        cirq.Moment(op for op in m if not isinstance(op.gate, cirq.GlobalPhaseGate)) for m in c
-    ))
-    # hardware-friendly layering: every moment is either all CZ or all single-qubit
-    if any(any(op.gate == cirq.CZ for op in m) and any(len(op.qubits) == 1 for op in m) for m in c):
-        c = cirq.stratified_circuit(c, categories=[lambda op: op.gate == cirq.CZ])
-    return c
-
-
-def _is_virtual_z(op: cirq.Operation) -> bool:
-    if not isinstance(op.gate, cirq.PhasedXZGate):
-        return False
-    x = op.gate.x_exponent % 2
-    return min(x, 2 - x) < 1e-9
-
-
-# Minimum free single-qubit slots in an idle window before we echo it (XY4 needs 4).
-# In simulation, echoing every short window cost up to ~1% of the ceiling share (pulse error
-# with nothing to refocus in sub-0.3 us idles); long windows are where hardware dephasing
-# and ZZ crosstalk accumulate, so only those are protected.
-_DD_MIN_SLOTS = 4
-
-
-def _add_dd(circuit: cirq.Circuit) -> cirq.Circuit:
-    """Echo long idle windows of qubits that may be in superposition with X-Y-X-Y.
-
-    A qubit is protected from its first non-virtual single-qubit gate (before that it sits
-    in |0>, which dephasing cannot touch) to the end of the circuit, including the trailing
-    window before measurement. Pulses go only into single-qubit moments, and only windows
-    with >= _DD_MIN_SLOTS free slots are echoed. XYXY = -I, so the noiseless state is
-    unchanged up to a global phase.
-    """
-    moments = [list(m) for m in circuit]
-    one_q_layer = [all(len(op.qubits) == 1 for op in m) for m in circuit]
-    for q in sorted(circuit.all_qubits()):
-        busy = [any(q in op.qubits for op in m) for m in circuit]
-        active = [i for i, m in enumerate(circuit) for op in m
-                  if q in op.qubits and len(op.qubits) == 1 and not _is_virtual_z(op)]
-        if not active:
-            continue
-        i = active[0] + 1
-        while i < len(circuit):
-            if busy[i]:
-                i += 1
-                continue
-            j = i
-            while j < len(circuit) and not busy[j]:
-                j += 1
-            slots = [t for t in range(i, j) if one_q_layer[t]]
-            seq = [_X, _Y, _X, _Y] if len(slots) >= _DD_MIN_SLOTS else []
-            for s, gate in enumerate(seq):  # evenly spaced over the window
-                moments[slots[round((s + 0.5) * len(slots) / len(seq) - 0.5)]].append(gate.on(q))
-            i = j
-    return cirq.Circuit(cirq.Moment(m) for m in moments)
-
-
-# =============================================================================================
-# Bryan's solution (origin/bryan @ b94cb62, dicke_solution.py), cleaned up without changing
-# any circuit it returns. build() dispatches to it where it measured better
-# (experiments/results/vs_bryan.csv). Derivations (a)-(f) of every block, and Sections 2.1
-# (W tree) and 2.3 (two-arm split), are in docs/bryan_constructions.md.
+# ---- small cases: numerically synthesized exact circuits ----------------------------------
 #
-# A program is a list of instructions ('U', qubit, 2x2 matrix) and ('CZ', a, b);
-# compile_layers turns it into alternating PhasedXZ / CZ moments.
-# =============================================================================================
+# For small (N, k) we embed exact Ry + CZ circuits found offline by experiments/synth.py
+# (gradient optimization to infidelity < 1e-13, then greedy CZ pruning). They depend only
+# on a layout shape (grid coordinates), never on calibration data; the calibration-dependent
+# part, where to put the shape, is decided below at build time. Synthesis itself takes
+# minutes per case, far over the 60 s build budget, which is why the result is cached here.
+
+_GRID_SYMMETRIES = (
+    lambda r, c: (r, c), lambda r, c: (r, -c), lambda r, c: (-r, c), lambda r, c: (-r, -c),
+    lambda r, c: (c, r), lambda r, c: (c, -r), lambda r, c: (-c, r), lambda r, c: (-c, -r),
+)
 
 
-def _RY(theta):
-    """R_y(theta) = exp(-i theta Y / 2): |0> -> cos(theta/2)|0> + sin(theta/2)|1>."""
-    c, s = math.cos(theta / 2), math.sin(theta / 2)
-    return np.array([[c, -s], [s, c]], dtype=complex)
-
-
-def _RX(theta):
-    """R_x(theta) = exp(-i theta X / 2)."""
-    c, s = math.cos(theta / 2), math.sin(theta / 2)
-    return np.array([[c, -1j * s], [-1j * s, c]], dtype=complex)
-
-
-def _RZ(theta):
-    """R_z(theta) = exp(-i theta Z / 2)."""
-    return np.diag([np.exp(-0.5j * theta), np.exp(0.5j * theta)])
-
-
-def _u(q, m):
-    return ('U', q, m)
-
-
-def _cz(a, b):
-    return ('CZ', a, b)
-
-
-def _x_all(qubits):
-    """Flip every qubit (complement trick); merged into the final 1q layer by the compiler."""
-    return [_u(q, _MX) for q in qubits]
-
-
-def _cnot(control, target):
-    """CNOT = H_t CZ H_t (one CZ, derivation (a))."""
-    return [_u(target, _H), _cz(control, target), _u(target, _H)]
-
-
-def _cry_on_zero(control, target, theta):
-    """Controlled-R_y(theta), valid when target = |0> whenever control = |1> (one CZ, derivation (b))."""
-    return [_u(target, _RY(-theta / 2)), _cz(control, target), _u(target, _RY(theta / 2))]
-
-
-def _split_angle(p):
-    """Angle theta with sin^2(theta/2) = p, i.e. R_y(theta)|0> has |1>-probability p."""
-    return 2 * math.asin(math.sqrt(min(max(p, 0.0), 1.0)))  # clamp tiny float overshoots
-
-
-def _transfer(src, dst, p):
-    """|1>_src|0>_dst -> sqrt(1-p)|10> + sqrt(p)|01>, |00> -> |00> (two CZs, derivation (c))."""
-    return _cry_on_zero(src, dst, _split_angle(p)) + _cnot(dst, src)  # rotate dst; clear src if dst took it
-
-
-def _givens(a, b, theta, middle_a=None):
-    """Givens rotation G(theta) on (a, b) with two CZs (derivation (d)).
-
-    `middle_a` optionally replaces the middle R_x(theta/2) on qubit a (used by the merged top block).
-    """
-    if middle_a is None:
-        middle_a = [_u(a, _RX(theta / 2))]  # the XX-part angle
-    ops = [_u(b, _S), _u(a, _RX(np.pi / 2)), _u(b, _RX(np.pi / 2))]  # W V: map XY-YX onto -(XX+ZZ)
-    ops += _cnot(a, b)  # CNOT conjugation turns X_a into X_a X_b and Z_b into Z_a Z_b ...
-    ops += middle_a + [_u(b, _RZ(theta / 2))]  # ... so these become exp(-i t XX/2) exp(-i t ZZ/2)
-    ops += _cnot(a, b)
-    ops += [_u(a, _RX(-np.pi / 2)), _u(b, _RX(-np.pi / 2)), _u(b, _S.conj().T)]  # undo W and V
-    return ops
-
-
-def _g3(c, a, b, theta):
-    """Moving-hole gate on (c, a, b): partial move a->b if c=0, full move if c=1.
-
-    Five CZs, derivation (e).
-    """
-    al = (theta + np.pi) / 4  # alpha in the derivation
-    be = (theta - np.pi) / 4  # beta in the derivation
-    ops = _cnot(a, b)  # afterwards b = 1 implies a = 0, enabling known-target rotations of a
-    ops += [_u(a, _RY(-al)), _cz(c, a), _u(a, _RY(-be)), _cz(b, a), _u(a, _RY(be)), _cz(c, a), _u(a, _RY(al))]
-    ops += _cnot(a, b)  # map |a=1,b=1> back to |a=1,b=0>, completing the excitation move
-    return ops
-
-
-def _top_block(a, b, c, p_top, p_next):
-    """Merged first two steps of an SCS sweep on a line a-b-c, four CZs (derivation (f)).
-
-    Domain {000, 001, 011} (qubit order a, b, c). The excitation on c moves to b with probability p_next
-    when the input is 001, and to a with probability p_top when the input is 011.
-    """
-    t2 = _split_angle(p_top)  # the 011 branch (landing site a)
-    t1 = _split_angle(p_next)  # the 001 branch (landing site b)
-    ops = _cry_on_zero(b, a, t2)  # step 1: only 011 has b = 1, and there a = 0
-    middle = [_u(b, _RX((t1 - np.pi) / 2)), _cz(a, b), _u(b, _RX(np.pi / 2))]  # step 2: Z_b iff a = 1
-    ops += _givens(b, c, t1, middle_a=middle)
-    ops += [_u(a, _S)]  # step 3: cancel the -i phase acquired by the a = 1 branch
-    return ops
-
-
-def _scs_ops(window, m, all_ones_possible):
-    """SCS_m on window = [p_k, ..., p_1, p_0] (p_0 = position m) as a nearest-neighbour sweep."""
-    k = len(window) - 1  # largest number of excitations handled
-    if k == 1:  # a single partial move = Givens rotation (it also fixes |11>)
-        return _givens(window[0], window[1], _split_angle((m - 1) / m))
-    ops = []
-    i = k  # current hole index: branch r = i has its hole at p_i
-    if not all_ones_possible:  # the merged top block needs p_k = 0 on every input
-        ops += _top_block(window[0], window[1], window[2], (m - k) / m, (m - k + 1) / m)  # branches k, k-1
-        i = k - 2
-    while i >= 1:  # remaining sweep steps, top to bottom
-        theta = _split_angle((m - i) / m)  # branch r = i moves its hole with probability (m-i)/m
-        if i == k:  # first step of an unmerged sweep: no "in transit" control yet
-            ops += _givens(window[0], window[1], theta)
-        else:  # (c, a, b) = (p_{i+1}, p_i, p_{i-1})
-            ops += _g3(window[k - i - 1], window[k - i], window[k - i + 1], theta)
-        i -= 1
-    return ops
-
-
-def dicke_unitary_ops(path, k):
-    """BE unitary on `path`: |0^{N-r} 1^r> (ones at the END of the list) -> |D^(N)_r>, every r <= k."""
-    N = len(path)
-    k = min(k, N)
-    ops = []
-    for m in range(N, 1, -1):  # decide positions N, N-1, ..., 2 (position 1 is then determined)
-        kk = min(k, m - 1)  # the window reaches back k sites, but not past position 1
-        ops += _scs_ops(list(path[m - 1 - kk: m]), m, all_ones_possible=(k >= m))
-    return ops
-
-
-def dicke_path_ops(path, k):
-    """|D^(N)_k> on a path: X on the last k sites, then the BE unitary."""
-    return [_u(q, _MX) for q in path[len(path) - k:]] + dicke_unitary_ops(path, k)
-
-
-def split_ops(left, right, k):
-    """Two-arm construction (Section 2.3).
-
-    left = [l_1, ..., l_a], right = [r_1, ..., r_b]; l_1 and r_1 are the arm heads.
-    Ladder requirement: l_{k+1-u} must neighbour r_u for every rung that is actually used.
-    """
-    a, b = len(left), len(right)
-    N = a + b
-    P = [math.comb(b, j) * math.comb(a, k - j) / math.comb(N, k) if (0 <= k - j <= a and j <= b) else 0.0
-         for j in range(k + 1)]  # hypergeometric law of j = number of excitations in the right arm
-    tail = [sum(P[u:]) for u in range(k + 2)]  # tail[u] = P(j >= u)
-    ops = []
-    for u in range(1, min(k, b) + 1):  # thermometer chain r_1 ... r_k
-        if tail[u] <= 1e-15:  # j >= u impossible: r_u and all later r's stay |0>
-            break
-        if u == 1:
-            ops.append(_u(right[0], _RY(_split_angle(tail[1]))))  # P(r_1 = 1) = P(j >= 1)
-        else:  # conditioned on the previous bit (known |0> target)
-            ops += _cry_on_zero(right[u - 2], right[u - 1], _split_angle(tail[u] / tail[u - 1]))
-    for u in range(1, k + 1):  # rung copies l_{k+1-u} = NOT r_u
-        v = k + 1 - u
-        if v > a:  # left arm too short: this left bit does not exist (then r_u is always 1)
-            continue
-        if u > b or tail[u] <= 1e-15:  # r_u is always 0, so l_v is always 1
-            ops.append(_u(left[v - 1], _MX))
-        elif tail[u] < 1 - 1e-15:  # r_u genuinely random: copy its complement across the rung
-            ops += _cnot(right[u - 1], left[v - 1]) + [_u(left[v - 1], _MX)]
-        # otherwise r_u is always 1 and l_v correctly stays |0>
-    ops += dicke_unitary_ops(list(reversed(right)), min(k, b))  # BE on each arm (head = last element);
-    ops += dicke_unitary_ops(list(reversed(left)), min(k, a))  # the two arms run in parallel
-    return ops
-
-
-def _subtree_sizes(root, children):
-    """Subtree sizes s(v) for a rooted tree given as {node: [children]}."""
-    order = [root]  # BFS order; the list grows while we iterate
-    for v in order:
-        order.extend(children.get(v, []))
-    size = {}
-    for v in reversed(order):
-        size[v] = 1 + sum(size[c] for c in children.get(v, []))
-    return size
-
-
-def w_tree_ops(root, children):
-    """|W_N> on a rooted tree with 2N-3 CZs (Section 2.1)."""
-    size = _subtree_sizes(root, children)
-    kids = children.get(root, [])
-    if not kids:  # |W_1> = |1>
-        return [_u(root, _MX)]
-    first = kids[0]  # served with the 1-CZ product-state split
-    p = size[first] / size[root]  # probability that the excitation goes to the first child's subtree
-    ops = [_u(root, _RY(_split_angle(1 - p)))]  # root = sqrt(p)|0> + sqrt(1-p)|1>
-    ops += _cnot(root, first) + [_u(first, _MX)]  # -> sqrt(p)|01> + sqrt(1-p)|10>
-    stack = [root]  # depth-first traversal keeps every qubit's instruction order valid
-    while stack:
-        v = stack.pop()  # current owner of an excitation
-        remaining = size[v] - (size[first] if v == root else 0)  # mass still owned by v
-        for c in children.get(v, []):
-            if v == root and c == first:  # already served by the 1-CZ split
+def _place_synth(g, entry, n, sq_pauli_error_rate, zero_errors, one_errors):
+    """Best placement of a synthesized shape on calibrated qubits and couplers."""
+    coords = entry["coords"]
+    N = len(coords)
+    th = np.array(entry["params"]).reshape(-1, N)
+    ry_count = (np.abs(np.sin(th / 2)) > 1e-9).sum(axis=0)  # non-trivial rotations per qubit
+    uses = {}
+    for layer in entry["cz_layers"]:
+        for e in layer:
+            uses[tuple(e)] = uses.get(tuple(e), 0) + 1
+    usable = set(g.nodes)
+    best, best_cost = None, math.inf
+    for sym in _GRID_SYMMETRIES:
+        pts = [sym(r, c) for r, c in coords]
+        r0, c0 = pts[0]
+        for anchor in usable:
+            qs = [cirq.GridQubit(anchor.row + r - r0, anchor.col + c - c0) for r, c in pts]
+            if not all(q in usable for q in qs) or not all(g.has_edge(qs[i], qs[j]) for i, j in uses):
                 continue
-            ops += _transfer(v, c, size[c] / remaining)  # hand child c its share
-            remaining -= size[c]
-        stack.extend(reversed(children.get(v, [])))
-    return ops
+            cost = sum(u * g.edges[qs[i], qs[j]]["err"] for (i, j), u in uses.items())
+            cost += sum(
+                _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N, n_sq=ry_count[i])
+                for i, q in enumerate(qs)
+            )
+            lam = _readout_lambda(qs, zero_errors, one_errors, n, math.exp(-cost))
+            cost += math.log1p(lam / max(math.comb(N, n) - 1, 1))
+            if cost < best_cost:
+                best, best_cost = qs, cost
+    return best
 
 
-def _tree_children(parent):
-    """{child: parent} -> {node: [children sorted by decreasing subtree height]}."""
-    children = {}
-    for v, u in parent.items():
-        children.setdefault(u, []).append(v)
-    height = {}
-
-    def h(v):
-        if v not in height:
-            height[v] = 1 + max((h(c) for c in children.get(v, [])), default=0)
-        return height[v]
-
-    for v in list(children):  # tallest first (critical path first), deterministic ties
-        children[v].sort(key=lambda c: (-h(c), str(c)))
-    return children
-
-
-# ---- compiler -------------------------------------------------------------------------------
-
-
-def _is_identity(u, atol=1e-9):
-    """True if u is the identity up to a global phase."""
-    phase = u[0, 0] if abs(u[0, 0]) > 0.5 else 1.0  # an identity-like matrix has |u00| ~ 1
-    return np.allclose(u / phase, _I2, atol=atol)
-
-
-def _phxz(q, u):
-    return cirq.PhasedXZGate.from_matrix(u).on(q)  # exact up to a global phase
-
-
-def compile_layers(ops, dd=True):
-    """Instruction list -> cirq.Circuit with alternating PhasedXZ / CZ moments (ALAP, optional DD).
-
-    Single-qubit matrices are merged per qubit between CZs. With dd, each idle window of a
-    qubit after its first CZ gets X, Y, X, Y, ... plus a final undo pulse, and the window's
-    real gate is merged into its last slot (between CZs) or its first slot (after the last CZ).
-    """
-    pending = {}  # qubit -> product of 1q matrices since its last CZ
-    last = {}  # qubit -> index of its most recent CZ node
-    nodes = []
-    for kind, a, b in ops:
-        if kind == 'U':
-            pending[a] = b @ pending.get(a, _I2)  # later gates act after earlier ones
-            continue
-        nodes.append({'qubits': (a, b),
-                      'pre': {a: pending.pop(a, None), b: pending.pop(b, None)},  # 1q gates right before it
-                      'preds': {last[q] for q in (a, b) if q in last},
-                      'succs': set()})
-        last[a] = last[b] = len(nodes) - 1
-    trailing = pending  # 1q gates after a qubit's last CZ (or the only gates of CZ-free qubits)
-    for i, nd in enumerate(nodes):
-        for p in nd['preds']:
-            nodes[p]['succs'].add(i)
-    asap = [0] * len(nodes)  # earliest CZ layer (1-based); program order is a topological order
-    for i, nd in enumerate(nodes):
-        asap[i] = 1 + max((asap[p] for p in nd['preds']), default=0)
-    depth = max(asap, default=0)
-    layer = [0] * len(nodes)  # ALAP layer: one before the earliest successor
-    for i in range(len(nodes) - 1, -1, -1):
-        layer[i] = min((layer[s] for s in nodes[i]['succs']), default=depth + 1) - 1
-    n_mom = 2 * depth + 1  # 1q, CZ, 1q, ..., CZ, 1q: CZ layer t is moment 2t-1
-    slots = [dict() for _ in range(n_mom)]  # 1q moments: qubit -> matrix
-    cz_moments = [[] for _ in range(n_mom)]
-    q_layers = {}  # qubit -> [(CZ layer, pre-gate)]
-    for i, nd in enumerate(nodes):
-        cz_moments[2 * layer[i] - 1].append(cirq.CZ(*nd['qubits']))
-        for q in nd['qubits']:
-            q_layers.setdefault(q, []).append((layer[i], nd['pre'][q]))
-    for q in set(q_layers) | set(trailing):
-        seq = sorted(q_layers.get(q, []), key=lambda t: t[0])
-        if not seq:  # no CZ: its only gate goes in the final moment (stay |0> as long as possible)
-            u = trailing.get(q)
-            if u is not None and not _is_identity(u):
-                slots[n_mom - 1][q] = u
-            continue
-        t0, u0 = seq[0]
-        if u0 is not None:  # gates before the first CZ (the qubit is |0> before them, so no DD there)
-            slots[2 * t0 - 2][q] = u0
-        windows = [(seq[j][0], seq[j + 1][0], seq[j + 1][1], 'mid') for j in range(len(seq) - 1)]
-        windows.append((seq[-1][0], depth + 1, trailing.get(q), 'tail'))
-        for t_a, t_b, u, kind in windows:
-            moms = [2 * t for t in range(t_a, t_b)]  # the window's 1q moments
-            u = _I2 if u is None else u  # net single-qubit operation required in this window
-            if not dd or len(moms) < 2:  # no idle CZ layer inside (or DD disabled)
-                if not _is_identity(u):  # just before the next CZ / just after the last CZ
-                    slots[moms[-1] if kind == 'mid' else moms[0]][q] = u
-                continue
-            pulses = [(_MX if i % 2 == 0 else _MY) for i in range(len(moms) - 1)]
-            acc = _I2
-            for p in pulses:
-                acc = p @ acc
-            pulses.append(acc.conj().T)  # the final slot undoes the product: window total = identity
-            if kind == 'mid':  # the real gate must act right before the next CZ
-                pulses[-1] = u @ pulses[-1]
-            else:  # tail window: apply the real gate first, then decouple
-                pulses[0] = pulses[0] @ u
-            for mom, p in zip(moms, pulses):
-                if not _is_identity(p):
-                    slots[mom][q] = p
+def _synth_circuit(entry, qs) -> cirq.Circuit:
+    N = len(qs)
+    th = np.array(entry["params"]).reshape(-1, N)
     moments = []
-    for i in range(n_mom):
-        ops_i = [_phxz(q, u) for q, u in slots[i].items()] if i % 2 == 0 else cz_moments[i]
-        if ops_i:
-            moments.append(cirq.Moment(ops_i))
+    for l in range(len(th)):
+        moments.append(cirq.Moment(cirq.ry(th[l, i]).on(qs[i]) for i in range(N)))
+        if l < len(entry["cz_layers"]):
+            moments.append(cirq.Moment(cirq.CZ(qs[i], qs[j]) for i, j in entry["cz_layers"][l]))
     return cirq.Circuit(moments)
 
-
-# ---- calibration model and layout search ------------------------------------------------------
-
-T_IDLE = 60e-6  # nominal effective coherence time used to price idling (s)
-
-
-class Calibration:
-    """Pessimistic error rates and the usable coupling graph built from the four calibration dictionaries."""
-
-    def __init__(self, cz, sq, e0, e1, beta=1.0):
-        def pess(v):  # mean + beta * sigma, clipped so the logarithms stay finite
-            mean, std = v
-            return float(min(max(mean + beta * std, 1e-6), 0.5))
-
-        self.sq = {q: pess(v) for q, v in sq.items()}  # usable qubits = those with single-qubit data
-        med0 = float(np.median([v[0] for v in e0.values()])) if e0 else 0.01  # fallback readout errors
-        med1 = float(np.median([v[0] for v in e1.values()])) if e1 else 0.02
-        self.e0 = {q: pess(e0[q]) if q in e0 else med0 for q in self.sq}  # 0 -> 1 readout error
-        self.e1 = {q: pess(e1[q]) if q in e1 else med1 for q in self.sq}  # 1 -> 0 readout error
-        self.cz = {}  # frozenset pair -> CZ error, only couplers whose two qubits are usable
-        for pair, v in cz.items():
-            a, b = tuple(pair)
-            if a in self.sq and b in self.sq and a != b:
-                key = frozenset((a, b))
-                self.cz[key] = min(self.cz.get(key, 1.0), pess(v))  # keep the better value if listed twice
-        self.adj = {q: set() for q in self.sq}
-        for key in self.cz:
-            a, b = tuple(key)
-            self.adj[a].add(b)
-            self.adj[b].add(a)
-
-    def edge_cost(self, a, b):
-        """-log(1 - CZ error) for coupler (a, b)."""
-        return -math.log(1 - self.cz[frozenset((a, b))])
-
-    def ro_cost(self, q, p):
-        """-log(1 - readout error) for a qubit that is |1> with probability p."""
-        return -math.log(1 - ((1 - p) * self.e0[q] + p * self.e1[q]))
-
-    def sq_cost(self, q):
-        """-log(1 - single-qubit error)."""
-        return -math.log(1 - self.sq[q])
-
-
-def estimate_log_fidelity(circuit, cal, data_qubits, p_exc):
-    """Predicted log success probability of a compiled circuit: sum of log(1 - gate error),
-    minus each qubit's time from its first gate to measurement over T_IDLE, minus readout."""
-    total = 0.0
-    first = {}  # qubit -> index of its first moment
-    durations = []
-    for i, moment in enumerate(circuit):
-        is_cz = any(len(op.qubits) == 2 for op in moment)  # moments are homogeneous: CZ or 1q
-        durations.append(T_CZ if is_cz else T_1Q)
-        for op in moment:
-            for q in op.qubits:
-                first.setdefault(q, i)
-            if len(op.qubits) == 2:
-                total += math.log(1 - cal.cz[frozenset(op.qubits)])
-            else:
-                total += math.log(1 - cal.sq[op.qubits[0]])
-    cum = np.cumsum([0.0] + durations)  # time at each moment boundary
-    for q, i in first.items():
-        total -= (cum[-1] - cum[i]) / T_IDLE  # linearised decay
-    for q in data_qubits:
-        total -= cal.ro_cost(q, p_exc)
-    return total
-
-
-def _grow_paths(cal, beams, length, edge_w, node_w, p_exc, forbidden=(), beam=200):
-    """Beam search extending partial simple paths [(cost, path)] to `length` qubits, avoiding
-    `forbidden`. A qubit at position i costs node_w[i] 1q gates plus readout, and the edge into
-    it edge_w[i-1] CZs. Returns the beam, best first, or [] if no path can be extended."""
-    while len(beams[0][1]) < length:
-        pos = len(beams[0][1])
-        cand = {}  # dedupe partial paths by (qubit set, end)
-        for cost, path in beams:
-            u = path[-1]
-            for v in cal.adj[u]:
-                if v in path or v in forbidden:
-                    continue
-                c = (cost + edge_w[pos - 1] * cal.edge_cost(u, v) + node_w[pos] * cal.sq_cost(v)
-                     + cal.ro_cost(v, p_exc))
-                key = (frozenset(path) | {v}, v)
-                if key not in cand or cand[key][0] > c:
-                    cand[key] = (c, path + (v,))
-        beams = heapq.nsmallest(beam, cand.values(), key=lambda t: t[0])
-        if not beams:
-            return []
-    return beams
-
-
-def ladder_candidates(cal, k, p_exc, w_edge, w_node):
-    """All straight 2 x k ladders: right row r_1..r_k and a left row with l_{k+1-u} next to r_u."""
-    out = []  # (cost, left, right)
-    for q in sorted(cal.sq, key=str):  # r_1
-        for d in ((0, 1), (0, -1), (1, 0), (-1, 0)):  # direction of the right row
-            for s in ((d[1], d[0]), (-d[1], -d[0])):  # side on which the left row lies
-                right = [cirq.GridQubit(q.row + u * d[0], q.col + u * d[1]) for u in range(k)]
-                left = [cirq.GridQubit(r.row + s[0], r.col + s[1]) for r in reversed(right)]
-                if any(x not in cal.sq for x in right + left):
-                    continue
-                edges = (list(zip(right, right[1:])) + list(zip(left, left[1:]))
-                         + [(right[u], left[k - 1 - u]) for u in range(k)])  # rows + rungs
-                if any(frozenset(e) not in cal.cz for e in edges):
-                    continue
-                cost = (sum(w_edge * cal.edge_cost(*e) for e in edges)
-                        + sum(w_node * cal.sq_cost(x) + cal.ro_cost(x, p_exc) for x in right + left))
-                out.append((cost, left, right))
-    out.sort(key=lambda t: t[0])
-    return out
-
-
-def path_profile(N, k):
-    """CZ count per edge and gate count per position of the BE construction (weights for the path search)."""
-    qs = cirq.LineQubit.range(N)
-    circ = compile_layers(dicke_path_ops(qs, k), dd=False)
-    pos = {q: i for i, q in enumerate(qs)}
-    edge_w = [0] * max(N - 1, 1)
-    node_w = [0] * N
-    for op in circ.all_operations():
-        if len(op.qubits) == 2:  # CZ (always nearest-neighbour)
-            edge_w[min(pos[q] for q in op.qubits)] += 1
-        else:
-            node_w[pos[op.qubits[0]]] += 1
-    return edge_w, node_w
-
-
-def generate_candidates(N, n, cal, *, dd=True, deadline=None, max_paths=10, max_ladders=12):
-    """Yield exact candidates (circuit, qubit_list, kind) for |D^(N)_n> on the calibrated device.
-
-    k = min(n, N - n) = 0 gives the product state; otherwise B-E on the best paths, then the
-    two-arm split construction on the best ladders. (W states, k = 1, never come here.)
-    """
-    deadline = deadline if deadline is not None else time.monotonic() + 30.0
-    k = min(n, N - n)
-    flip = n > N - n  # prepared the complement: append X everywhere
-    p_exc = n / N  # excitation probability of each Dicke qubit (for readout pricing)
-    if k == 0:
-        qs = sorted(cal.sq, key=lambda q: ((cal.e1[q] if flip else cal.e0[q]) + cal.sq[q], str(q)))[:N]
-        gate = cirq.PhasedXZGate(x_exponent=1 if flip else 0, z_exponent=0, axis_phase_exponent=0)
-        # an explicit (identity) gate keeps the qubits visible in the circuit
-        yield cirq.Circuit(cirq.Moment(gate.on(q) for q in qs)), qs, 'trivial'
-        return
-    edge_w, node_w = path_profile(N, k)
-    starts = [(node_w[0] * cal.sq_cost(q) + cal.ro_cost(q, p_exc), (q,)) for q in sorted(cal.sq, key=str)]
-    for _, path in _grow_paths(cal, starts, N, edge_w, node_w, p_exc)[:max_paths]:
-        ops = dicke_path_ops(list(path), k) + (_x_all(path) if flip else [])
-        yield compile_layers(ops, dd=dd), list(path), 'path'
-        if time.monotonic() > deadline:
-            return
-    a, b = N // 2, N - N // 2  # balanced arms (b >= a >= k because k <= N/2)
-    ew, nw = path_profile(b, k)
-    w_edge = sum(ew) / max(len(ew), 1)  # average CZs per arm edge
-    w_node = sum(nw) / max(len(nw), 1)  # average 1q gates per arm qubit
-    for _, left0, right0 in ladder_candidates(cal, k, p_exc, w_edge, w_node)[:max_ladders]:
-        used = set(left0) | set(right0)
-        rights = _grow_paths(cal, [(0.0, tuple(right0))], b, [w_edge] * b, [w_node] * b, p_exc, used, beam=30)
-        for _, right in rights[:2]:
-            lefts = _grow_paths(cal, [(0.0, tuple(left0))], a, [w_edge] * a, [w_node] * a, p_exc,
-                                used | set(right), beam=30)
-            for _, left in lefts[:1]:
-                qs = list(left) + list(right)
-                ops = split_ops(list(left), list(right), k) + (_x_all(qs) if flip else [])
-                yield compile_layers(ops, dd=dd), qs, 'split'
-        if time.monotonic() > deadline:
-            return
-
-
-# ---- Bryan's entry points ---------------------------------------------------------------------
-
-
-def _bryan_create_dicke_state(N, n, cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors):
-    """Hardware track: the candidate with the best predicted log-fidelity (30 s budget)."""
-    start = time.monotonic()
-    cal = Calibration(cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors)
-    if N > len(cal.sq):
-        raise NotImplementedError('not enough usable qubits')
-    best = None  # (predicted log-fidelity, circuit, qubits)
-    for circ, qs, _ in generate_candidates(N, n, cal, deadline=start + 30.0):
-        if len(circ) > 1750:  # would not be run on the hardware
-            continue
-        score = estimate_log_fidelity(circ, cal, qs, n / N)
-        if best is None or score > best[0]:
-            best = (score, circ, qs)
-    if best is None:
-        raise NotImplementedError('no embedding within the 1750-moment limit')
-    return best[1], set(best[2])
-
-
-def _ideal_calibration():
-    """Uniform costs on every Willow105 qubit and coupler (the bonus is noise-free). Unlike
-    _uniform_calibration, all rates are equal, as Bryan's bonus search was tuned with."""
-    device = cirq_google.Willow105
-    qubits = sorted(device.metadata.qubit_set)
-    cz = {tuple(sorted(p)): (1e-3, 0.0) for p in device.metadata.qubit_pairs}
-    flat = {q: (1e-3, 0.0) for q in qubits}
-    return Calibration(cz, flat, flat, flat, beta=0.0)
-
-
-def broadcast_tree(cal, root, N):
-    """Greedy round-by-round matching tree: each informed node recruits at most one neighbour per round."""
-    informed = [root]  # in order of recruitment
-    parent = {}  # child -> parent
-    center = (np.mean([q.row for q in cal.sq]), np.mean([q.col for q in cal.sq]))  # prefer central growth
-    while len(informed) < N:
-        taken = set()  # recruited this round
-        new = []  # (child, parent) pairs of this round
-        for u in list(informed):
-            options = [v for v in cal.adj[u] if v not in parent and v != root and v not in taken]
-            if not options or len(informed) + len(new) >= N:
-                continue
-            v = min(options, key=lambda q: (  # not a dead end, central, deterministic ties
-                len([w for w in cal.adj[q] if w not in parent and w != root]) == 0,
-                (q.row - center[0]) ** 2 + (q.col - center[1]) ** 2, str(q)))
-            taken.add(v)
-            new.append((v, u))
-        if not new:  # stuck (cannot happen on a connected device with N <= 105)
-            return None
-        for v, u in new:
-            parent[v] = u
-            informed.append(v)  # v can recruit from the next round on
-    return parent
-
-
-def _bryan_create_dicke_state_adaptive(N, n):
-    """Bonus track: the shallowest exact candidate on the ideal device (no measurements)."""
-    cal = _ideal_calibration()
-    k = min(n, N - n)
-    flip = n > N - n
-    cands = []  # (circuit, qubits)
-    if k == 1:  # W states: broadcast trees from every root
-        for r in sorted(cal.sq, key=str):
-            parent = broadcast_tree(cal, r, N)
-            if parent is None:
-                continue
-            qs = [r, *parent]
-            ops = w_tree_ops(r, _tree_children(parent)) + (_x_all(qs) if flip else [])
-            cands.append((compile_layers(ops, dd=False), qs))
-    else:  # reuse the hardware candidate generator on the ideal device; few candidates suffice
-        for circ, qs, _ in generate_candidates(N, n, cal, dd=False, max_paths=2, max_ladders=3):
-            cands.append((circ, qs))
-    if not cands:
-        raise NotImplementedError('no embedding found')
-    best = None  # (depth, circuit, qubits)
-    for circ, qs in cands:
-        for c in (circ, pack_earliest(circ)):  # layered and packed versions
-            if best is None or len(c) < best[0]:
-                best = (len(c), c, qs)
-    return best[1], set(best[2])
-
-
-# =============================================================================================
-# Data: synthesized exact circuits (rewritten by the export scripts between the markers)
-# =============================================================================================
 
 # BEGIN SYNTH TABLE (generated by experiments/synth.py --export; do not edit)
 _SYNTH = {
@@ -1414,6 +497,45 @@ _SYNTH = {
     ),
 }
 # END SYNTH TABLE
+
+
+# ---- larger cases: B-E from synthesized nearest-neighbour SCS blocks ----------------------
+#
+# SCS_{m,k} acts on the k+1 consecutive line qubits m-k .. m, and its input is always a
+# sorted string |0^{w-l} 1^l> on that window. experiments/scs_synth.py finds exact Ry + CZ
+# circuits for these small isometries on a path, so the whole B-E circuit becomes
+# nearest-neighbour on a line: no routing. Keys are (m, k, all_ones); all_ones marks the
+# second-group blocks SCS_{m,m-1}, m <= K, whose window can hold |1^m>.
+
+
+def _scs_blocks(N: int, K: int) -> list[tuple[int, int, bool]]:
+    return [(m, K, False) for m in range(N, K, -1)] + [(m, m - 1, True) for m in range(K, 1, -1)]
+
+
+def _scs_cz_count(N: int, K: int) -> int | None:
+    keys = _scs_blocks(N, K)
+    if not all(key in _SCS for key in keys):
+        return None
+    return sum(sum(map(len, _SCS[key][0])) for key in keys)
+
+
+def _scs_circuit(N: int, K: int, path: list) -> cirq.Circuit:
+    """U_{N,K} |0^{N-K} 1^K> = |D^N_K> on `path` (path[0] is B-E qubit 1).
+
+    Operations are appended in order with cirq's EARLIEST insertion, so consecutive
+    blocks overlap in time wherever their qubits allow (the paper's "pushed stairs").
+    """
+    ops = [cirq.X(q) for q in path[N - K:]]
+    for m, k, all_ones in _scs_blocks(N, K):
+        layers, params = _SCS[(m, k, all_ones)]
+        window = path[m - k - 1:m]
+        th = np.array(params).reshape(-1, k + 1)
+        for l in range(len(th)):
+            ops += [cirq.ry(th[l, i]).on(window[i]) for i in range(k + 1)]
+            if l < len(layers):
+                ops += [cirq.CZ(window[i], window[j]) for i, j in layers[l]]
+    return cirq.Circuit(ops)
+
 
 # BEGIN SCS TABLE (generated by experiments/scs_synth.py --export; do not edit)
 _SCS = {  # (m, k, all_ones): (cz_layers, ry_params)
@@ -1509,3 +631,1322 @@ _SCS = {  # (m, k, all_ones): (cz_layers, ry_params)
     (20, 5, False): ([[(0, 1), (2, 3), (4, 5)], [(1, 2)], [(0, 1), (4, 5)], [(1, 2), (3, 4)], [(4, 5)], [(3, 4)], [(2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(2, 3), (4, 5)]], [2.0943951094654607, 3.1415925532643842, -3.1415927548457048, 3.141592169891693, -1.5707951533478952, 1.5707775707924474, -2.704606508247201, -4.712389063011616, -4.712389025720749, -2.5270122039296568, -1.522424838878677, 2.8950002528630843, -1.4841836906301817, 3.605239194590624, 0.0621774774842041, 3.199518524971668, 1.296911440744896, 3.1626716505405903, -1.3360712805961485, 1.57079739974409, 1.0449712500074602, 0.8982872843983549, 1.5707918452051257, -1.5012673196863027, 1.8632288691401448, -4.712389007951291, -2.407063638660775, 2.064260830966303, 3.7661155558258166, -0.06951076170951609, 0.7067352949914016, -1.5802352921394138, -2.2641948926099675, -0.4934621967445474, 0.946273447797361, -0.5437004636604581, -0.4830843595584481, 0.5307047639105209, -1.6119174693173264, 4.712386179928758, 2.1953191988622973, 3.6852927691422, -2.28175777237506, -2.092062120670162, 5.4977870512636935, 5.497787234677558, -2.517069741129078, 2.90084282513934, -1.610644103865743, -3.141594162525163, -3.340442401618678, 2.555044129957265, 2.7397273562735086e-07, 0.24074980373876703, -3.324181670499133, -3.14159415275473, -1.5707507319716514, -1.5707952709567052, -3.141593156110166, 1.536188774866976, -2.8803876710867997, 0.0687445070370974, 4.712388812771856, -1.5708000012947811, 2.4915014480111943, 1.6028164089774306, -1.67945306365034, -3.1415920506021218, -0.25307006162703277, -0.1988496677248504, -0.9207046514333892, 2.325228709215539, -1.4621401729606118, -3.141592212669618, 2.808114324174802, 3.0294899710136937e-07, -1.5707963249783183, 2.3897476408540843, 1.227789537257534, 0.06874346180540658, 3.14159434490389, -4.712388987055188, 2.7272508672623742e-08, -3.1879966391795413, -1.619431200597835, 5.613310771880372e-09, 1.5707476930260773, 1.5707965558109644, -1.5707963359608785, -1.5243923506680774, -5.970159570518078, 3.1415927004588333, 3.141595119377687, -3.1415929557096884, 4.7123890322108295, -1.5707928669140505]),
 }
 # END SCS TABLE
+
+
+# ---- compilation helpers -----------------------------------------------------------------
+
+
+def _to_cz_phxz(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Compile to cirq.CZ + PhasedXZGate and drop global phases."""
+    # CZTargetGateset already merges single-qubit runs into PhasedXZ and drops negligible ops
+    c = cirq.optimize_for_target_gateset(circuit, gateset=cirq.CZTargetGateset())
+    c = cirq.drop_empty_moments(cirq.Circuit(
+        cirq.Moment(op for op in m if not isinstance(op.gate, cirq.GlobalPhaseGate)) for m in c
+    ))
+    # hardware-friendly layering: every moment is either all CZ or all single-qubit
+    if any(any(op.gate == cirq.CZ for op in m) and any(len(op.qubits) == 1 for op in m) for m in c):
+        c = cirq.stratified_circuit(c, categories=[lambda op: op.gate == cirq.CZ])
+    return c
+
+
+# ---- dynamical decoupling --------------------------------------------------------------------
+
+_X = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0)
+_Y = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0.5)
+
+
+def _is_virtual_z(op: cirq.Operation) -> bool:
+    if not isinstance(op.gate, cirq.PhasedXZGate):
+        return False
+    x = op.gate.x_exponent % 2
+    return min(x, 2 - x) < 1e-9
+
+
+# Minimum free single-qubit slots in an idle window before we echo it (XY4 needs 4).
+# In simulation, echoing every short window cost up to ~1% of the ceiling share (pulse error
+# with nothing to refocus in sub-0.3 us idles); long windows are where hardware dephasing
+# and ZZ crosstalk accumulate, so only those are protected.
+_DD_MIN_SLOTS = 4
+
+
+def _add_dd(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Echo long idle windows of qubits that may be in superposition with X-Y-X-Y.
+
+    A qubit is protected from its first non-virtual single-qubit gate (before that it sits
+    in |0>, which dephasing cannot touch) to the end of the circuit, including the trailing
+    window before measurement. Pulses go only into single-qubit moments, and only windows
+    with >= _DD_MIN_SLOTS free slots are echoed. XYXY = -I, so the noiseless state is
+    unchanged up to a global phase.
+    """
+    moments = [list(m) for m in circuit]
+    one_q_layer = [all(len(op.qubits) == 1 for op in m) for m in circuit]
+    for q in sorted(circuit.all_qubits()):
+        busy = [any(q in op.qubits for op in m) for m in circuit]
+        active = [i for i, m in enumerate(circuit) for op in m
+                  if q in op.qubits and len(op.qubits) == 1 and not _is_virtual_z(op)]
+        if not active:
+            continue
+        i = active[0] + 1
+        while i < len(circuit):
+            if busy[i]:
+                i += 1
+                continue
+            j = i
+            while j < len(circuit) and not busy[j]:
+                j += 1
+            slots = [t for t in range(i, j) if one_q_layer[t]]
+            seq = [_X, _Y, _X, _Y] if len(slots) >= _DD_MIN_SLOTS else []
+            for s, gate in enumerate(seq):  # evenly spaced over the window
+                moments[slots[round((s + 0.5) * len(slots) / len(seq) - 0.5)]].append(gate.on(q))
+            i = j
+    return cirq.Circuit(cirq.Moment(m) for m in moments)
+
+
+# ---- entry point ------------------------------------------------------------------------
+
+
+def create_dicke_state(
+    num_qubits: int,
+    num_excitations: int,
+    cz_pauli_error_rate: dict[
+        tuple[cirq.GridQubit, cirq.GridQubit], tuple[float, float]
+    ],
+    sq_pauli_error_rate: dict[cirq.GridQubit, tuple[float, float]],
+    zero_errors: dict[cirq.GridQubit, tuple[float, float]],
+    one_errors: dict[cirq.GridQubit, tuple[float, float]],
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """Create a Cirq circuit that produces a Dicke state.
+
+    Args:
+        num_qubits: The number, N, of qubits in the Dicke state.
+        num_excitations: The number, n, of 1s in the state.
+        cz_pauli_error_rate: Measured CZ Pauli error rates and their statistical uncertainties.
+        sq_pauli_error_rate: Measured single-qubit Pauli error rates and their statistical uncertainties.
+        zero_errors: Measured parallel 0 -> 1 readout error rates and their statistical uncertainties.
+        one_errors: Measured 1 -> 0 readout error rates and their statistical uncertainties.
+
+    Returns:
+        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
+
+    Raises:
+        NotImplementedError: The requested (N, n) combination is not implemented.
+    """
+    return build(
+        num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+        zero_errors, one_errors,
+    )
+
+
+def build(
+    num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+    zero_errors, one_errors, *, w_tree: bool = True, synth: bool = True,
+    scs: bool = True, tiny: bool = True, dd: bool = True, bryan: bool = True,
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """`create_dicke_state` with switches for the experiments (defaults = submission)."""
+    if bryan and _bryan_wins(int(num_qubits), int(num_excitations)):
+        try:
+            return _bryan_create_dicke_state(
+                int(num_qubits), int(num_excitations), cz_pauli_error_rate,
+                sq_pauli_error_rate, zero_errors, one_errors,
+            )
+        except Exception:  # any failure there: fall back to our constructions below
+            pass
+    circuit, qubits = _build_core(
+        num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+        zero_errors, one_errors, w_tree=w_tree, synth=synth, scs=scs, tiny=tiny,
+    )
+    return (_add_dd(circuit) if dd else circuit), qubits
+
+
+def _bryan_wins(N: int, n: int) -> bool:
+    """Where the vendored constructions measured better (experiments/results/vs_bryan.csv,
+    25 cases x 3 calibrations, idle noise): k = 2 for N >= 6 (1-7% higher median score; ~3
+    fewer CZ) and k >= 3 for N >= 9 (21-39%; the split B-E halves the CZ count). Ours win the
+    W states, k = 2 up to N = 5 and k >= 3 up to N = 8 (whole-state synthesis, up to +28%)."""
+    if N < 1 or not 0 <= n <= N:
+        return False
+    k = min(n, N - n)
+    return (k == 2 and N >= 6) or (k >= 3 and N >= 9)
+
+
+def _build_core(
+    num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+    zero_errors, one_errors, *, w_tree: bool, synth: bool, scs: bool, tiny: bool,
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    N, n = int(num_qubits), int(num_excitations)
+    if N < 1 or not 0 <= n <= N:
+        raise NotImplementedError(f"invalid (N, n) = ({N}, {n})")
+    flip = n > N - n  # D^N_n = X^N D^N_{N-n}: prepare the lighter one
+    k = N - n if flip else n
+    node_cost = {
+        q: _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N)
+        for q in sq_pauli_error_rate
+    }
+
+    if k == 0:  # product state: |0...0> or |1...1>
+        qubits = sorted(node_cost, key=node_cost.get)[:N]
+        if len(qubits) < N:
+            raise NotImplementedError("not enough calibrated qubits")
+        ops = [cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0).on(q) for q in qubits] if flip else []
+        return cirq.Circuit(ops), set(qubits)
+
+    g = _usable_graph(cz_pauli_error_rate, sq_pauli_error_rate)
+
+    # Measured (experiments/results/tiny.csv): for W2 this raises E[score] 60.2 -> 65.6 while
+    # the median dips 4.37 -> 4.16; for W3 it gains nothing, so only N = 2 uses it.
+    if k == 1 and w_tree and tiny and N == 2:
+        picked = _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate,
+                              zero_errors, one_errors)
+        if picked is not None:
+            return picked
+
+    if k == 1 and w_tree:
+        tree_cost = {  # a tree node receives ~4 non-virtual single-qubit gates
+            q: _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N, n_sq=4)
+            for q in sq_pauli_error_rate
+        }
+        tree = _best_w_tree(g, N, tree_cost, zero_errors, one_errors)
+        if tree is not None:
+            root, rounds = tree
+            logical = _w_tree_circuit(root, rounds)
+            qubits = {root} | {c for r in rounds for _, c in r}
+            if flip:
+                logical.append(cirq.X.on_each(*sorted(qubits)))
+            return _to_cz_phxz(logical), qubits
+
+    scs_cz = _scs_cz_count(N, k) if scs else None
+    synth_entry = _SYNTH.get((N, k)) if synth else None
+    if synth_entry is not None and (scs_cz is None or sum(map(len, synth_entry["cz_layers"])) <= scs_cz):
+        qs = _place_synth(g, synth_entry, n, sq_pauli_error_rate, zero_errors, one_errors)
+        if qs is not None:
+            logical = _synth_circuit(synth_entry, qs)
+            if flip:
+                logical.append(cirq.X.on_each(*qs))
+            return _to_cz_phxz(logical), set(qs)
+
+    if scs_cz is not None:
+        paths = _best_path(g, N, node_cost, edge_weight=scs_cz / (N - 1), keep=16)
+        if paths:
+            K = math.comb(N, n)
+
+            def total(cost_path):
+                cost, path = cost_path
+                lam = _readout_lambda(path, zero_errors, one_errors, n, math.exp(-cost))
+                return cost + math.log1p(lam / (K - 1))
+
+            path = min(paths, key=total)[1]
+            logical = _scs_circuit(N, k, path)
+            if flip:
+                logical.append(cirq.X.on_each(*path))
+            return _to_cz_phxz(logical), set(path)
+
+    layout = _best_path(g, N, node_cost) or _connected_patch(g, N, node_cost)
+    if layout is None:
+        raise NotImplementedError("no connected layout of the requested size")
+
+    logical, lq = _bartschi_eidenbenz(N, k)
+    if flip:
+        logical.append(cirq.X.on_each(*lq))
+
+    # Routing is chaotic: routing the raw CNOT/CRy circuit or a CZ-compiled one wins on
+    # different calibrations (by up to ~30% CZ). Try both while time allows; keep the
+    # one with fewer CZs. The raw variant goes first because it is the faster one.
+    device = g.subgraph(layout).copy()
+    start = time.monotonic()
+    best = None
+    for precompile in (False, True):
+        if best is not None and time.monotonic() - start > _SECOND_TRY_BUDGET_S:
+            break
+        router = cirq.RouteCQC(device)
+        initial = cirq.HardCodedInitialMapper(dict(zip(lq, layout)))
+        source = _to_cz_phxz(logical) if precompile else logical
+        routed, initial_map, swap_map = router.route_circuit(source, initial_mapper=initial)
+        circuit = _to_cz_phxz(routed)
+        key = (sum(op.gate == cirq.CZ for op in circuit.all_operations()), len(circuit))
+        if best is None or key < best[0]:
+            best = (key, circuit, {swap_map[initial_map[q]] for q in lq})
+    return best[1], best[2]
+
+
+# ---- bonus track ------------------------------------------------------------------------------
+
+
+def _uniform_calibration() -> dict:
+    """The bonus provides no error rates: every Willow105 qubit and coupler, equal rates."""
+    qubits = sorted(cirq_google.Willow105.metadata.qubit_set)
+    pairs = [tuple(sorted(p)) for p in cirq_google.Willow105.metadata.qubit_pairs]
+    return dict(
+        cz_pauli_error_rate={p: (2.5e-3, 0.0) for p in pairs},
+        sq_pauli_error_rate={q: (4e-4, 0.0) for q in qubits},
+        zero_errors={q: (5e-3, 0.0) for q in qubits},
+        one_errors={q: (1e-2, 0.0) for q in qubits},
+    )
+
+
+def _pack(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Fewest moments: merge single-qubit runs, then re-insert every operation as early as
+    possible (single-qubit gates may share a moment with CZs; depth is all that is scored)."""
+    c = cirq.merge_single_qubit_gates_to_phxz(circuit)
+    c = cirq.drop_empty_moments(cirq.drop_negligible_operations(c))
+    return cirq.Circuit(c.all_operations())
+
+
+# BEGIN TAIL TABLE (generated by experiments/tail_synth.py --export; do not edit)
+_TAIL = {  # (m0, rmax): (cz_layers, ry_params); layers x moments in the comment
+    (3, 3): ([[(0, 1)], [(1, 2)], [(0, 1)], [(1, 2)], [(0, 1)], [(1, 2)], [(0, 1)], [(1, 2)]], [1.5707963303469792, 1.5707963240040934, -2.6400838329792315, -0.3700661050752265, -0.6154797152970434, 1.0692875054873898, 2.556342143146312, -1.5707963237274767, 2.22070036321792, -0.8284327595560322, 1.5707963303712058, 1.2286321466908667, 0.5206929053739001, 1.7832316397572954e-09, -0.9657145374259075, -1.7882240671422942, 1.5707963190248824, 0.6579746819908037, 2.095963922958718, -1.5707963310235467, -0.47928002090060356, 0.6850722461751143, 0.7853981581983099, -0.3061181446009184, 0.8857240819408468, -4.712388978836242, -1.5707963292871856]),  # 8 layers, 17 moments, seed 0
+    (4, 3): ([[(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)]], [1.5707962982970571, 3.1415926065222077, -6.432639944073551e-08, 1.5707963008895083, -0.28106444846533807, -2.4568734519080384, -1.5707963473476796, 3.3443344541138744, -1.2897318280661116, -0.7853981582653792, -3.141592614191532, -0.20274179940622214, 3.2191528138882415, 3.9269907999036247, 1.570796310201494, -2.06831274437046, 1.4932361620739871, 1.5707963047255287, 3.1415926524772173, -1.073279916545144, 3.205366813690145, -2.5261129624201577, 1.5707963428580896, -0.7564399664011292, -1.634570517320612, 1.5707963092935853, 1.5707963461664993, 0.7564399394580953, 0.3451513238494828, -2.7210583473299907, 0.785398160277753, 0.13112634678296495, -2.701345798611319, -3.422167059930552e-08, -5.176036568463908, 2.2250681363524616, 1.7579319992886404, 1.5707963992896066, 1.5707963793143258, -0.4712936310414048, 2.16905877870186, -3.9269908283695893, -2.3561944930618153, -1.8849008423233622, 1.5707963795896076, -1.5707963631418909, -1.5707963295150063, -1.5707962870550913]),  # 11 layers, 23 moments, seed 2
+    (4, 4): ([[(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1), (2, 3)], [(1, 2)]], [3.141592662532128, 4.712388971897984, -2.9436503067350357e-08, 2.785599607107176e-09, -1.0733994731014802, 1.57079635152719, -1.570796329748618, -1.6573414949197678, 0.6278358701468902, 1.4826287818350491e-07, -1.5707962952633094, -3.055036626298932, 1.3557001078575124, -0.8366744940622952, -8.657752091683066e-08, 2.347908713224087, 2.1744716545158678, -3.1415926154656866, -0.004726499061627136, -0.7771123818558964, -1.2642481823157463, 0.8240979019814526, -0.3265330869207424, 0.11902348325449784, -0.61621297619263, 3.1415927658962666, -1.5707963851106255, -3.2606269874008906, -3.5815357884169257, -3.7238728322844494, -2.8703755072951145, 0.4258364465503351, 2.2819565483550335, 3.965690596842957, -1.5747439082260213, -1.9966328158313276, 3.242665683256164, -2.9600657838345334, 1.1261461861728458e-08, 1.207262766804804, 2.255121543277687, 2.3174947025724197, 1.570796323395757, -1.207262764987721, 2.677412682902926, 3.1415926310528555, 3.211015417462838, 3.264486155040022, 2.8203745012150443, -1.5707963262591298, 0.33430669820127856, -2.8607566574166987, 0.7678850021456511, 1.570796327295107, -1.5707963552290352, -0.5519533959678801, -0.7678850098761053, 3.749230106406958e-09, 3.1415926489799904, -1.0188429482287533]),  # 14 layers, 29 moments, seed 20
+    (5, 3): ([[(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)]], [3.141592701615992, 1.4327261902457296, 6.12636894900626e-08, 1.5707962296594238, -1.0514833723992383, 0.2343942477444806, -4.389205276249261, -1.132375114834043e-05, 4.712389080318398, -0.5193081533433398, -0.23439453879223218, -0.6569064923370017, 0.6593292680181962, -2.734983744147368e-05, -2.168773817620816, -0.4733801837684739, -3.3372464172615035, 1.0225356908077203, 3.1113554345378986, 3.739570180387743, 0.4733805361749282, -1.5715297307578575, 1.6818418546069314, -1.5405957687328882, -0.16893915718188474, 2.339385567025658, -0.05826219085696919, 4.597142785844387, 0.6525294545056948, 3.3105365871001458, 0.802202803549713, 1.1266496236460637, 2.0319047229772838, 0.8030772756440349, 2.3530969207350068, -0.07745793718270576, -0.020281098002809025, 3.141592790421824, -1.5126170684587035, 0.7884958187848564, -1.4933550537562228, 2.223159623685971, 1.6283117593481193, -1.263344998706585e-05, 1.573925374586037, 3.5160742114082724, -3.141568221675613, -1.4204612972348396, 1.5620747552222767, 3.1384635962320875, 1.8117915628241759, -2.18627591210886, 3.1415693832421905, -1.5707963704093222, -2.3937606571506405, -1.626320680499134, 1.5708658820555423, 4.663422096667008e-08, 1.5479892352748468e-07, -0.7478319445820227, 0.05562769325490311, 0.7854023609627641, -1.5707963127625255, -2.4181129538883477, -2.2216612041715873, 1.1041654730650514, -0.7853985331372044, -3.1001020652139284e-07, -2.6353611510252178e-08, -1.6434110827459862, 0.4665964820551293, 1.5707963435168908, 0.00010499658006918342, 3.1414882653861995, -0.2931726440700371, 3.1415926628594337, 1.5707963566315515, 1.5707963587629106, 1.570796298804822, -1.277623639917278]),  # 15 layers, 31 moments, seed 1
+    (5, 4): ([[(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)]], [1.7771770307460768, 3.1415925826718447, -0.21462459571923007, 0.4251810225912385, 0.821630959106263, -0.24925471142657799, 3.1415927576321203, -1.7019259975476355, -4.2415201152709425, -0.8216316501046556, 0.2492542224594358, 3.1415927191679516, 1.294785489129658, 2.0416648767074617, -2.4154478706425633, -0.14911428033901836, -3.1415915904976175, -0.826839042718015, -3.696971721364724, -3.867737619175484, -1.6280645633098598, 2.980937878607801, -0.5293330128748471, -1.0134992460508463, 2.191541709058096, -2.579390037856631, -3.0747415481612594, -4.072871030779733, 0.5269673853412747, -1.438976714034336, 2.579390516970121, 0.07997033239695879, 2.1310409480288888, 0.09644608145782238, 0.01839079303582867, 3.2980268625065734, 1.4908281108140586, -3.141594589983797, -3.74878739898916, 0.10080149717182338, 2.9851569186225397, 1.344265319672137, -0.8831488497706429, -0.6115613851559879, -0.3147583639520714, 1.2584112328195913, 3.4180746698426123, 0.0065346889097383015, 4.087235624685469, 1.7049474815941759, -1.2584346062298677, -0.05714355954448303, 2.428282813822308, 1.978134110898114, 1.7565134795879094, 2.517133149884394, 0.057140644349156076, -3.085750393205053, -0.9302234173059144, 2.1896443486296366, -0.9463364916542596, 6.879141784784156e-07, 2.8081016601873006, -1.1399017091331873, -3.9562526699102656, -0.9247143814055027, 2.497162193457125e-07, -3.5786157479435774, 0.4136127619395944, 0.7833892210123939, -0.6460588232187311, 1.5707960236270677, -3.1801994471451716, -2.4765927191327513, 2.646039756510681, -1.2648226237137254, 0.6154785381502171, -1.507582103718151, -1.2347523374849287, -1.04708822401805, -1.8767698524241654, -2.1862762168395413, -1.5078110620110856e-07, -1.3416587830978972, -3.401604945770943, 1.224580886168716, -3.141592689175775, -0.7853981160762539, -2.752930750641728, 1.2726525198131138, -2.7953775728936803, -1.5707967326528762, -0.785398008955597, -0.5869650987494412, -0.648925819725874, -2.646672257593014, 1.5707965195419804, -1.5707963649914913, 3.1415923910228174, -0.4814724711835868, -0.4949205133638709, -1.5707963724624343, 1.5707962316471418, -3.334818464940168e-08, -1.9863631113731939, 1.7262189044748277, 3.1415929367726756, 3.1756308227412374e-08, -1.5707960526461777, -0.5309951855690058, 2.9861702228940503, -3.141592425813117, -1.5707961891915287, 1.570796078734322, -6.489933366966382e-08]),  # 22 layers, 45 moments, seed 0
+    (6, 3): ([[(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)]], [3.141592972700578, 0.4972143674816613, -0.85621409252971, 3.1415926770359057, -2.3118949784873494e-08, 5.7122970826644055e-08, 1.458501994590878, -0.13632187939804288, 2.2853793453074456, 3.141592621513768, 1.5707962905315616, 0.7513949367001973, 1.6830910180539833, -2.1937761358635686, 0.021711401916051414, -1.4742000817170375, -1.5707963079056413, -2.3221914097638505, 1.6059030423831704, -1.5812441921906732, -1.613938838725396, 3.9370456963178824, -3.8891120180547962, 0.861191919186241, 1.5356914727755882, 2.7625491413837437, -0.681194927494827, 1.2528647600213167, 3.7645056683978644, 0.7096043919646161, 0.17511681931940687, -0.378958638784738, -0.0005051283539323806, 1.5093535831345184, -2.8721014522363295, 0.591546274674676, -0.5641802529546234, -3.141455839513395, -4.458458377951913, 3.065611058482221, 1.8527254701701525, 2.5500466499083303, -1.468714187929623, 1.8621145922087446e-06, 0.3236309943886281, -1.377736092111538, 0.9400041628009141, 0.3916041224252407, -2.092810899179561, -0.861423569072368, -0.17848254151142262, 0.9959208797209136, -0.4521003311264487, -3.533196547153334, 0.7321517310989774, 0.42645381314024017, -1.16062849870128, -2.2994992918013644, -0.52920215793435, 2.7552497615145777, 2.727679919892942, -1.468122590444498, -6.652360788103778e-07, -1.4715861058110138, 1.9310453022517489, -2.755249752592832, -2.0468709658481226, -3.268562486087118, -0.9196887815099359, 5.133275309071604, -0.48044777766835933, 0.7946880840148345, 0.8357396282807061, 4.057180204332176, 0.1313190033413222, 2.462388206542168, 2.7762800629172184, -2.365484327775443, 2.291660999428031, 2.7723915704861417, 0.33864045104961005, 3.141593378636845, 1.570796367923844, 1.862140580596184, 2.267028981284622, 0.6369574640950691, -0.2780562714693922, 1.5707963237529567, -1.5309113336548181, -0.2682555296308834, -2.539147992017908, -2.6226872175516536, -3.141592749095676, -2.388041197579402e-07, 1.0954764769253122, 1.9696637405377113, -2.6068239615232063, 3.4738043626560122, -1.570796350387962, 3.1415932909863233, -1.45028762479388e-06, -0.3003435253334085, 2.4571569957817925, 0.2923505111987285, 3.143738105728306, 7.921852475125661e-08, -3.1415926568668793, -0.05003547390387463, -0.1625980009012264, -1.5707963313245903, -3.494717143286982, -0.5226291982834668, -0.38540535523678904, 3.1412081810015926, -1.0442783586506325e-08, 1.5707963033190955, -4.712389082699563, -1.5707964781218753, -4.236551491669787, 1.6770628965375898]),  # 19 layers, 39 moments, seed 1
+    (6, 4): ([[(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)]], [1.79681732754261, 3.141592643348737, 1.570800693546652, 1.570796304022096, 1.5707838400643475, 1.570780740764489, -0.9867545821554609, 3.141592610433054, -0.7651749536860896, -0.7853982635133899, 0.9630226579582571, 1.3808765914629326, -0.3209415048783878, -0.6990362472837554, 3.9067676847124724, 3.141592861601825, -1.570898519576992, 1.391205658358763, -1.277435210148063, -2.190818749471248, -1.5707935050164608, -5.3061008123411096e-08, 2.6589123393603185, 1.9067328142424855, -1.8944262398703025, -3.1415835458457093, 3.960047243651669e-08, -5.5402362452388324e-08, -3.1415823138571017, -2.0297855125129467, -2.3167103149477635, -1.9688303661483457, -3.362626282758551e-08, -0.26762578418458827, -4.12238918854674, 1.3683652500797145, -0.8488129363935858, -0.5229168257846052, 3.1415926650316566, 1.1732271054025099, 1.570894030513038, 2.8053858967116616, 2.183241383547539, -0.4442640927153709, -1.5708024820370368, -6.831467113072552e-08, 1.9550204202741748, 1.5136794408396, 0.36145750562709944, -1.570781923286267, -3.1415925931042805, -1.5707962276592446, 1.5708219931984435, 1.627925620705124, 1.6451906505043936, -3.141592614385904, 1.5707963857095915, -1.9405662327898385, -2.503715091414806, -2.5679023408696007, 1.4964016931624784, 5.119375768972393e-07, 7.425897406280769e-08, 6.927646381722491e-08, 2.657713576857069, -0.5736893053020309, -3.3963639596963584, 1.5707966153561073, -2.2807926492111164, 1.5707963321434542, -1.4960935664025363, 0.24731159475768139, -3.483715273619802, -1.779315866814349, 8.579729034177453e-08, 3.1415926444384166, -1.5707962886909648, -1.556757528404293, -2.732008791217628, 1.3622990850546168, -3.92699076107608, 0.6861174339547866, 1.4305823563183024e-07, -2.3430433010353537, 1.161212386906831, 1.5707501462154783, -2.3561945415106376, -2.307878852227068, 0.8801997557513459, -1.4417873572767719, 2.5565523112315733, -0.9553167819528958, -3.1415929870853185, 4.712388594711469, -0.9298636660618109, 3.6931761131587444, -3.17203206397353, 1.5707963413462098, -1.553597498889085e-08, 3.6518811094792995e-07, 1.5707960458848536, -1.409970006073206, -1.6927700525434375, -1.5707957526842822, 0.7853981560806224, 1.2208538028949003, 1.5707962525528623, 0.9865912304010286, 1.6927696686164388, -1.5707962243202884, 2.3561945196302814, -0.4546262679978774, -2.5021157368822937, -0.9865912341532522, 0.2444420349046246, 1.1676116920487984e-07, -7.469674017590448e-08, 3.1415925812177083, 0.03261149103600463, 2.1659622912330825, -1.815238330606492, 1.5707962829638773, -3.1415925458791945, -3.141592604134389, 1.570796074503828, -0.5951660245910804, 1.5707701233564186, 1.570770033164333, 3.141566317819703, -0.8815951270652301, -1.6548728721423092, 1.0459713533474067]),  # 21 layers, 43 moments, seed 6
+}
+# END TAIL TABLE
+
+# BEGIN BONUS SYNTH TABLE (generated by experiments/synth.py --bonus-export; do not edit)
+_BONUS_SYNTH = {
+    (4, 2): dict(  # 3 layers = 7 moments, 5 CZ, ladder, seed 0
+        coords=[(0, 0), (1, 0), (0, 1), (1, 1)],
+        cz_layers=[[(2, 3)], [(0, 2), (1, 3)], [(0, 1), (2, 3)]],
+        params=[-2.4121959773832304, -0.19449143864768134, 1.9811211708815972, 0.813964899962581, -2.3001930008562295, -1.3763048881299909, 3.6840084710212055, -1.6347988157547007, -1.8677748517379763e-09, 1.6459326957102467e-09, 1.5707963271470289, -1.5707963258105022, 3.141592654529376, -1.570796328472846, 2.5770715684959696e-09, 1.570796325412249],
+    ),
+    (5, 2): dict(  # 7 layers = 15 moments, 10 CZ, path, seed 0
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)],
+        cz_layers=[[(0, 1), (2, 3)], [(1, 2)], [(2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2)], [(0, 1)]],
+        params=[0.6183268576904242, 4.492265691117577, -0.8209378413355491, 0.6574833346606679, -0.6939678699158748, -0.43206140822478645, -3.1185870481778513, 3.1869665948668033, -1.983118445993127, 0.8613739578281225, 0.12409010769983507, -2.934922120891745, -2.229854361923873, -2.690058891780023, 1.3996791502766723, -0.3463281577298319, -2.3929465700149395, 2.617993879617297, -3.6052402650923736, 0.003711092141899059, -4.659959297015562, 0.6154797074967451, 2.589272463940698e-09, 1.570796317632, 0.0329888580686312, -0.25885703062599014, 0.7853981619369151, 1.5707963202639785, -1.570796331127954, -1.6037851879018736, -2.0973374610153246, -1.570796322384344, 3.141592661916084, 2.2535503248077753e-08, -1.1061837893983615, -3.1415926646213137, 1.5707963192449865, -1.570796314178292, -1.282448586953362e-08, 1.1061837826845407],
+    ),
+    (6, 2): dict(  # 9 layers = 19 moments, 18 CZ, path, seed 0
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5)],
+        cz_layers=[[(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(2, 3), (4, 5)], [(3, 4)], [(0, 1), (2, 3)]],
+        params=[-1.9337932255602202, 2.650215813244823, 1.0492421095569429, 1.966635779192254, 2.242817164651964, 0.39971805956555817, -2.0052506379994646, -1.920110291355524, 0.5910060105573643, -5.6528891690880405, 2.4695718231542476, -2.5162185471522123, 2.080526756530937, 1.1824497076580225, -1.6267632110877428, -0.48213158527426153, -8.671601293822655e-08, 0.5457042019892089, -0.4796655976500496, -0.5064446397756512, -2.1028320474366398, -4.2302573737922, 0.9553164890492081, -6.041705363656901, -3.430870176364036, -3.926990793557645, -2.553590043258465, 2.7344400970610088, 1.5707962685773413, -1.4384841492343092, 1.7017603027682535, -0.7853981697435274, -1.5707963150740005, 2.8198421155105406, -2.472628604053983, 1.6505724968326048, 3.0540167861939387, 3.851565811625154, 1.419742968176338, 0.32175063315616664, -1.5707963198923012, -2.350568753450995, -2.7850075411558457, 1.3860565947744303, -2.675094574257822, -3.1415926649076367, -1.5707961113501914, -0.3370340820232944, 2.741619433291046, -0.525233427548667, -3.608090726612401, 3.1415926505021523, 0.7446906940902297, -0.943700609172635, 1.149633759193378e-08, -1.5707963135229008, 0.15105336009150372, -1.5707963190356238, -2.315487117418924, -0.2900616861350798],
+    ),
+    (6, 3): dict(  # 7 layers = 15 moments, 16 CZ, path, seed 0
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5)],
+        cz_layers=[[(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (4, 5)]],
+        params=[-1.5707962130455408, -1.5707963669072422, -1.2484934837693835, 2.677852893806151, -1.570796326891571, -1.5707963579983042, -1.3538812969337437, 2.2076824064471654, -0.7258292147046127, 4.1947548524728075, 1.3210780635136898, -1.1694033033165354, -3.040077138571344, 0.9553166121189393, -3.1415927279214304, 2.186276027119289, 3.1415927005175757, 0.7353795506640356, 1.9557424699396124, -1.57079628708741, 1.5707962626577399, -3.7570723728886617, 1.570796269868093, 3.3381290493714038, -3.52653873757402, -2.3561944800343655, -8.271121236469163e-08, 1.570796328797033, 1.5707963426275722, 2.0580019341156586, 0.9341692175441971, 0.7853981722992848, -1.5707963297891552, 1.5707963285626245, -3.9269907868947294, -1.3608679740011063, 0.6366272342928964, -1.570796321359355, -2.0580488311233296e-08, -3.1415926280335755, -1.570796376716695, 1.3608679764386813, 1.5707963265235916, -3.141592655922092, 3.141592681679317, 1.5707963037506318, -1.570796316755702, -4.775212743248991e-09],
+    ),
+    (7, 2): dict(  # 10 layers = 21 moments, 20 CZ, path, seed 0
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6)],
+        cz_layers=[[(2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (5, 6)], [(0, 1), (2, 3)], [(3, 4)], [(4, 5)], [(5, 6)]],
+        params=[0.8406759534150193, -2.2368873301311876, 1.3688521052398543, -1.1671255956845126, 4.2360249062000035, -5.573104199310256, 4.024349505163281, 0.8097279653196362, -3.1488540073386373, 1.6707719504653264, -0.6877561580532189, 1.1003049262016231, 4.150112655686873, 0.11872516424950723, -3.22120024690279, 0.6154797291185731, 8.300863068362463e-09, 2.261025970887212, 0.7893847392282821, 3.9241555559643038, -0.8801110286278702, 2.6524273838383996, 3.1415926538517356, -0.8309162172825156, -0.5235987879004735, -3.665191430185407, 5.764165528933161, -2.647483939678624, 3.630757930247545, 1.5707963303072425, -0.6154797269371837, 5.23598778395726, -3.141592651973525, -0.9553165954143141, -0.6170516966639966, 3.4257748969844886, -3.460913284003649, 0.9553165954376885, -3.1415926374022534, 5.49778707996119, 0.6154797082768564, 2.8033277314858074, 1.6896598438381931, 2.356194473696153, 1.570796324846197, -6.28318531985105, 0.785398228665249, -6.20414717508837, -0.9607385352219316, 0.7500087803795625, -0.9099786809809091, -4.373079436410351, -1.5707963302656032, 3.1415926386905735, -0.16302233927443383, 3.309672329804172, -0.9625274471442385, 0.6481794066994543, -1.2314869635145185, 1.0831350727376598e-08, 1.5707963252333519, -0.70141393029521, 0.6527982219818074, 0.5784388224561018, -4.450589722996072, 0.8921774038954461, -3.4033920270115434, 0.8853260592834689, -1.5707963261359954, -0.6455375406362311, 1.204876167600644, 3.141592668319554, 9.400265126207892e-09, -1.3089969683248304, 0.6854702639151231, -1.5707963195070207, 5.504773494996029e-09],
+    ),
+    (7, 3): dict(  # 11 layers = 23 moments, 25 CZ, path, seed 0
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6)],
+        cz_layers=[[(2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4), (5, 6)], [(2, 3), (4, 5)], [(1, 2), (3, 4), (5, 6)], [(0, 1)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (2, 3)], [(1, 2), (3, 4)], [(0, 1), (4, 5)]],
+        params=[2.425377860250463, 1.420436932811339, -2.161059616459906, -1.3750311894377638, 1.201767919517172, 0.6783265651016375, -5.367572206381625, 2.4895549521748452, -2.887812519189456, 0.8715210231822786, 3.0345600750843995, -2.747533812896833, -0.13909991292150703, -5.628002086385022, 2.8394434475084296, 4.287308597656, -2.0536179539450954, -2.511660672629753, -4.885494981960157, -1.6753745188754587, -1.3266527960948886, -1.6784523381790515, 3.141592619145914, -6.434759553874087, -6.853894567228168, 1.5707963179996114, -2.3994610721837875, 1.3266528001084192, 0.8548428521192494, -2.5224311445243006, 0.030711594532043866, 1.3801993925762995e-07, -0.9553168020188472, -1.5707963331562496, -3.2496578255473914, -2.8387015671283735, -0.6191614872144582, -0.613451255959792, -2.895721819237688, -1.5707963955773616, -1.6695043802923295e-08, 0.10806523022416327, 1.4760350011212937, -5.320788654805948, 0.894762770644156, -3.194485427381277, 2.031525124146751, -2.356194427853673, -0.4091400639459128, -1.1629610711578138, -1.5707963690089648, 2.9432000383071695, 1.6236891234077813, -2.031525036652565, -3.1415927423520893, 1.8127106804473823, -3.376328277963724, 0.785398180300385, -3.141592682080387, -6.52905617138607, -4.572250888356923e-07, -0.5150639116844238, -1.3241594303170645, 0.5254025013913589, -2.3561945278293206, -4.712388977472932, -3.141592667205396, -3.141592066663335, 1.9792728256408054, 0.25258179253654384, 1.0453938456884055, 1.5707963360701516, 3.141592826054013, -0.0014180317614932783, 1.5707964162796009, 0.10658741124736966, -0.6594492702725119, -3.141592663433241, -1.5707962997706664, 1.5707961611662526, 1.5722143988362551, -2.701731642735394e-08, -3.1415926397990215, 0.1602304766043838],
+    ),
+    (8, 2): dict(  # 11 layers = 23 moments, 26 CZ, path, seed 0
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6), (0, 7)],
+        cz_layers=[[(2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(2, 3), (6, 7)], [(1, 2)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (4, 5), (6, 7)], [(3, 4)], [(2, 3), (4, 5)], [(1, 2), (5, 6)], [(0, 1), (4, 5), (6, 7)]],
+        params=[1.182875638135158, -0.1610962519737825, -1.8682938453676048, 1.3109326542511985, 3.984737321610213, 1.0399073293918926, 1.5707963713869142, -1.5707958403660487, -0.299579461145939, -0.42867582636542007, 0.4327590953547858, -1.656192311575709, -2.8134968598229277, 1.1138665767452958, 2.658738009315524, -3.916163852892353, -0.9122799404182446, 1.022390721592284, 3.141593109056141, -1.9401073672070597, -1.3208001339060567, 4.017999448487563, 0.6154641104753384, 0.9369325557649394, -0.24576418394245148, 1.0223902838014964, 0.8242415599898395, 2.636974299181726, 1.1568105135588163, 2.265185905942374, -2.5394557661156862, -2.093152928487497, 0.8902276485086401, -3.568165918268423, -3.6182720777726636, 0.04097068104195795, 2.0649969844287255, -3.141592556462822, -1.1485844438738857, 0.7909156088954745, 0.9893521303729209, -2.1862762075475124, -3.141592482036233, 2.034444090202299, 0.5235796356802069, -1.5707962658550934, -2.595144965158756, -2.2969766947159878, 1.1969238967523215, -3.757072353207302, 0.14578321211818765, 1.0585913829077322, -2.094375782403545, 2.526097379734009, 1.2871287749169842, -2.683970910541431, -1.927877197136656, 3.3327469381675736, 2.9958096640126133, -1.0585913110198122, 4.712389051452621, 3.405114056257041, 0.09913197286271627, 1.2018917031522782, -2.786413472416369, -2.593563778396161, -1.30563219167036e-07, -4.712388980915669, -3.138852848365088, -2.4498132192330786, 1.4988276373687313, -0.062559363500554, 1.2463130905574338, 0.04621488665314902, 1.5707963485349798, -2.260467602003248, -3.395420125835216, 4.34313382548974e-08, -1.597959566913444, -0.17862390741253004, 2.6825793130881266, 1.570796345064908, -0.4239862712984041, 1.938416257447696, 0.2538605659988924, 3.319958590154768e-05, -0.785398068908005, -0.3829343075172862, -3.1415926969332286, -1.570796353520601, 1.9947825722793433, -1.2487450091705388, 4.709649019412176, -4.712388848147991, 1.5707963080517906, 1.5707965078510175],
+    ),
+    (8, 3): dict(  # 15 layers = 31 moments, 35 CZ, path, seed 2
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6), (0, 7)],
+        cz_layers=[[(4, 5), (6, 7)], [(3, 4)], [(2, 3), (4, 5)], [(1, 2), (3, 4), (5, 6)], [(2, 3), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4)], [(2, 3), (4, 5)], [(5, 6)], [(0, 1), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (4, 5), (6, 7)]],
+        params=[3.6129513457649782, -0.21026673584003416, 0.0005564090797890159, -0.18253970377164386, 1.6442479820354112, 2.9985738077091733, 1.5707963391668909, 1.5707963418744884, -2.352469779406452, -4.016515429298642, 0.6088556952445974, -4.298023353289622, 2.4459905847463386, -0.5595650026910348, 2.886578263369376, 1.6187825806047675, -1.2386584871844317, -2.6783435206524437, -5.156545191866447, 1.4556471437518281, -2.222102969976184, -0.34052222291567064, 1.7029106780471377, -2.5382774418075758, 2.476217029485486, 1.7722024124624667, 0.7395812236622916, 1.3297451139760867, 2.22102112754051, 1.9566901099612872, 0.7732665272553247, 0.10075134186663223, 0.4875897135241077, 2.1862752391979052, -0.5032349487578387, 1.5145459337287612, 2.256108726640158, 0.26068162900299496, 2.186276008667595, 0.7838566976119081, 0.9812248203633438, 8.690378018148643e-07, -1.389311973448074, 3.14159274355831, 1.4898919303260059, -1.831477925067532, 1.5707963930521036, 0.8678313753980866, -1.7113390655591443, 0.6154793372803032, -4.188790276804318, 3.1415928141023364, -0.40820645022751184, 8.501764258250086e-08, -1.5707965928232037, -2.438627783933918, -0.4649190316024979, -4.712389004898515, 1.0471975124056363, -3.1415927476848386, 1.5707963237774867, -1.7330278723378213e-08, -1.047197423126458, -4.020160418501012, -0.008116950258054855, -2.8252124684596414, -3.1415926455722802, 4.712388979817569, -6.283185336759128, 1.570796298846397, -1.8400503350130064, -0.7156815252900657, 2.9707534076464857, 1.8343971182485517, 2.88961340035674, 1.8675267990655426, -4.712388977181919, -1.7980125586083888, 1.3164516993096913, -1.9253172099973828, -0.31144143936850716, -2.9918461016568942, 0.2519792630844801, 0.29673049646974353, 9.85851624849468e-09, -0.9888057303032824, 2.3608963076032246, 2.41578834695427, -2.000921251417079, -2.356194531058714, -1.1995829541409493e-08, 1.0024267815678762, -1.41037575304677e-07, -0.5238969973137161, -2.872863007945622, -1.3099825940682819, 0.43012496596827765, -1.5707963771352158, -3.141592660850869, 3.1415926491784436, 3.334517076169379e-07, 0.92858605884797, -0.2734315107252507, -0.7278319607636113, -1.5589962107815836, -7.954660743625639, 1.570796332930008, 1.079672093386303e-08, -3.1415926235510963, 2.7868185462026873, 0.7853982156748054, -2.0609114668928683, 1.5589962889087585, 1.5707963168051466, -8.427511395187017e-07, -0.01799770284158577, -1.5707963479937361, -4.1575662604682345e-07, -1.5707963273363876, 0.49011513113593136, -3.1415926457780268, -1.5707963446021498, 1.5707971650430783, -1.5277071927922128, -4.712388857428403, -3.1415925851152973, 6.4550530712936375e-09, -1.570796331173947],
+    ),
+    (8, 4): dict(  # 12 layers = 25 moments, 29 CZ, path, seed 0
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6), (0, 7)],
+        cz_layers=[[(3, 4)], [(2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(2, 3)], [(1, 2), (3, 4)], [(0, 1), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (2, 3), (4, 5)], [(1, 2)], [(0, 1), (4, 5), (6, 7)]],
+        params=[0.2642274695443464, -3.141592604003216, -5.2034032397675945e-09, 2.401196605606055, -1.2599636336027822, -1.209688784201047, -1.4321141769405972, -2.640284821909553, 2.686664978454055, 2.5375830992762953, 1.5884519449135475, 1.1839263679982899, 3.236193346884449, 0.40505510458943295, -3.2802748014853167, 1.0694884954508685, -1.960619240276676, 2.1748057948075346, -4.577137023129584, -2.2374339061998127, 0.9223453146646388, 0.804633663681733, 4.591835556298982, 0.3496391536198354, -1.3303129941994862, 2.905586899243478, -1.5707963267254128, 0.8506827165710913, 2.893625833728055, 0.43798847288626797, 2.444279524867206, 0.9460338810876546, -2.8777543813524287, -1.3347905355612242, -1.5707963706944257, -2.7337788987817815e-08, -0.3400357828619901, -0.03110906518950629, -2.8723781078614232, 1.508857473363232, 1.2134599480970063, 1.6959284082324387e-08, -1.7570489349651728, 2.9163467354728794, 1.0804708785427872, 0.48511129682354487, 1.3834151981729712, -3.540563638314114, 2.0846987756209803, 1.570796332196542, 3.327845227271449, 1.7960422745032094, -2.751940950994004, -2.4627870243731196, -1.5707963321616227, 1.036081818759087, 2.0122105025060892, 2.452018084904386, -8.899372923669954e-09, 1.570796308965873, 1.5707963645473282, 3.14159264576596, 2.3561944970286643, 0.5347145061358527, -2.2956085255818044, -3.9269907989501243, 6.601668183936078e-09, 2.356194497921938, -1.570796326834797, -1.570796326814794, -3.926990823728115, 1.003739552816486, 0.7248121902285901, 1.5707963342372944, -1.306540977598949e-09, -1.5707963268903036, 1.5524488583259548, -0.5991120499611137, 2.5197305107717614, -2.289407417057842, 1.1500685458345095, -3.386571323603872, 1.5707963267739258, -1.2565371437119364, -0.03862111685612542, -3.251797505745734, 2.858795862365353, -1.9146476694274195, -1.1500685529362729, 1.570796326935247, 3.761509013027593, -0.2827523208730781, 0.03862111970180845, -3.031387804478038, 2.4754552610082357, 1.629519203959612, 1.570796326882755, -3.1415926535245298, 2.5216762943513777, -1.6023031887718138, -1.5524488582240317, 2.169908376939425, 1.570796326831349, -3.141592653522494],
+    ),
+    (9, 2): dict(  # 13 layers = 27 moments, 33 CZ, path, seed 0
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6), (0, 7), (0, 8)],
+        cz_layers=[[(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4), (5, 6)], [(4, 5), (6, 7)], [(7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (2, 3), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (4, 5)], [(5, 6), (7, 8)], [(0, 1), (2, 3), (6, 7)], [(7, 8)], [(2, 3), (4, 5), (6, 7)]],
+        params=[-3.5845593629382217, 0.9551506755174813, 2.0141853357605246, 1.335489270379621, -5.576401374194251, 1.799679626058538, 0.8292356281543299, 1.5766423806435614, -3.4296121310252197, 1.3348181799364012, 0.07691501239663655, -2.065002365978857, -2.4568435411602807, -1.3794144654429394, -3.438865576966298, -5.541624612752812, -3.028727784429887, -1.6985000810525517, -1.5270891762642407, -3.3854918171342936, -1.9045925935085062, -3.1416299164569232, -2.3006019085778213, -4.712388936033044, 6.283185334613898, -3.260303599082543, 3.8631482322300723, 3.6086264628991453, 4.66281599799862, -0.2557872332399678, 3.141629973112591, -5.054748552556377, -2.6181317396210875, 4.843447847036794, 4.712388953108708, 2.8357603188351597, 1.2535015164935408, -2.2185670261509642, -0.981212852462102, -1.5707962878020045, -2.7992330281304807, -0.5234609219666992, -0.6546576821355004, 3.1415926686049604, 3.587739651953313, 4.197547726168953, -2.7678005951308577, 0.6689639701604794, 4.791261582585295e-08, -1.615882832739479, 0.6847191211403932, -5.724966975379896e-09, 3.2704135098456417, -1.4933444516109984, 0.8045938862765813, 3.605240323371217, -2.4726286798700845, 1.5707963253546153, 2.7530144626424283e-09, 7.32836871043524e-08, 2.094395144620372, -5.796526428838333, -0.6895211723341907, -1.6148848182300108, -0.4636475169377284, 1.57079635445285, -1.5707963379104593, -3.141592678666672, -4.7123891095334045, -4.2965642827211444e-11, -2.299555140093341, -1.1430736505156232, -0.7413092920365771, -3.1415925677529324, -5.671395438639048, 4.332258467249424, -7.169262289109828, 5.0355578620927354e-09, -1.1567405492335873e-08, 1.457517561499624, 0.5760153918244726, -1.33614863697199, -1.5707963247199985, -0.433513512308205, -0.13315051960772373, -1.76714570428305, -1.5707963401993383, 3.1415926565899275, 2.412833929753032, -2.4086120457819895, 2.121547982455018, 3.1415926099637446, 1.392519867190307, 1.2986791578044983, 2.4216442885949365, -6.806784207584634, -0.615479585868167, -0.6154796974574678, -2.814205223076584, 2.087226817686821, 4.485830793951979, -0.39269903344060836, -0.0877637090572168, 2.4216460198502276, -9.162978622595261, 1.304236546271342e-07, -1.5707963362298711, -2.5136634646493876, 0.7925669404813767, -3.421012659536626, -1.178097223992688, -3.8392270942098374, -2.290746430214601, -5.235987662124761, 2.3561944165097817, -3.9269907434143914, 2.6079579683915197, 0.2617989315258041, -2.63561457779931, 4.712388962853237, -3.1415927289553047, -1.5707962938507563, -1.570796389812562, 1.5707963189069594, 1.5707963775879485, -1.0371616110927908],
+    ),
+    (9, 3): dict(  # 34 layers = 69 moments, 135 CZ, path, seed 1
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6), (0, 7), (0, 8)],
+        cz_layers=[[(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)]],
+        params=[-0.7807816948275481, 3.9167316511827894, -0.8087362944564599, 0.2567075810715704, 2.6017472266828863, -3.141592818294222, -1.2044047447129307, -1.2425773073722477, 0.06517339484550627, 0.915567007462083, -1.7047440437666537, 3.0791715527567316, 2.2612184329814986, 0.3499976244853367, -3.666611134784117e-07, -2.1636645436849338, 2.758099785526033, 1.137369156133346, 2.334309373967741, -1.2898024967660442, 2.4673259025507015, -1.2871291779357488, 1.2739590712258453, -8.87893533692256e-08, 3.2547214056932563, 1.844405923422724, -0.9240297200029315, 3.5757430230427123, 1.5025133796638632, -2.946294945643634, -2.4464552286924914, 0.6583760932838643, -1.3407533676079156e-07, 1.1289057744914521, 0.49402052316742057, -0.3028158728114422, 1.7306507258733461, 0.734108041621156, -0.9652083894515273, 0.4278787767697409, -0.9986952590374678, -0.9260428646196852, 1.6022267929780252, -0.9945434549097617, -1.4159822065775585, -3.0865127692774417, -0.9708456061287879, 0.5364793857509395, 4.1452793005340265, -1.3009879346384572, -2.9051128013548917, -0.8757957741248243, 0.7522600962803982, -1.7160331637279351, 0.91620426362553, -0.5008958040068464, 2.3677772133870914, 1.7507947795704817, -2.0004022526850895, 0.5936780679409553, -3.141592637815784, -1.1133981667998492, -3.072085188738962, -0.7422077358095721, 2.2919155691911666, 0.14466809140823356, -2.0773763884922727, -0.695468439612448, -0.05409120229832853, -2.123711917820701, -1.80387507885203, 2.2887678543955285, -0.8959424808049573, 1.1409490441508843, 2.01910225392341, 1.0907279897831164, -0.8899443793738769, 1.0715493734200392, 3.493601500064635, 1.6437151973743271, 0.9032771802234875, -0.9721928093874397, 1.604062871756807, 1.7555471181204567, 2.914108985309814, -2.025286987170697, -0.8097789010153186, 0.12644206024614346, -3.1415930025316534, -2.0621216180356474, 1.6520566018599632, -1.3716498608568708, -1.3502867648873367, 3.0691275955159667, -2.0612516930139866, 1.0987364790929708, -0.8846120602312437, -3.141593316829447, -0.4209975806400297, 0.916193123257981, -2.8557219568042482, -1.3897980528935767, 1.3770744162555415, 3.3820539893629804, -2.6711342127899687, -1.3511614663751048, -3.0169787404390824, -2.19421711955851, -1.0204095611946826, -1.2264345134262857, -0.7551387863460515, -0.9367924661045449, 0.6389294225626206, -1.2073203336743232, 2.4705109115508512, -0.12461378710307382, -1.1745963589186073, 0.11392276292968055, -1.5766291595680795, -0.8945696501706439, -1.2313114340174558, -0.9359407010033888, 2.1735439359453776, 3.129518362081498, -4.549487000705257, -1.761542801521146, -0.05799908569053301, 1.236663651497526, -3.1424844029998535, -1.4528311657757111, 0.8195280061705306, -1.375169238413906, 3.1297620411624454, -1.131616746748867, -1.7713147721910967, 0.6782188124953471, 1.5436542461063918, -0.20581791553638779, -2.163519859509426, 1.8376674377533173, -0.13757622785604837, 1.1640171609345318, 0.5192343544952847, -1.2079755556566305, 0.511043720635723, -4.310547482693336, 0.2402810805493035, 0.9384581157629989, 2.629412045529034, 0.8318146550578611, 1.8754916168637574, -0.8120806724516926, -2.4536706840768043, -1.1650070915955484, -2.24796932067587, 1.217885862907605, -1.7114589158808708, 0.5200870639951319, 2.390831193166385, 0.4972233703655505, -1.3806415614804404e-07, 1.0874076413828264, 1.0116912381565744, -3.187814908999114, -1.1144311826887907, 0.9005128512698171, -1.9740396846394006, -2.3232794128818357, 0.14450196879450497, -3.141592591322305, 0.30820010539155723, -3.478268530422017, 1.1431662076166567, -1.437726578140848, 0.10803321020110519, -3.3202185613196784, -2.432613931579659, -1.6706450809144093, -4.0653682377859655e-09, 2.555937317162908, -0.3829841366905441, 2.250876590400174, 3.8774767735093, -0.011035223882635437, 0.22883136390217837, 1.6273014008801374, -0.24224254954170313, -1.5707962865077973, -1.1451340829176129, 1.8625585889163323, 4.5389893595784345, 1.4368089191199205, -0.009930483823980941, -2.3163875009685957, 2.4252571916599726, 1.5707963758688115, 1.5707962742177373, 1.5854769443003414, -1.8510524495816552, 1.6768796347332757, 1.6660675241428016, -4.130725005992748, -1.0657768379966028, -1.062130061443719, -1.2731723920096131e-07, -3.1415926020116456, 1.8487726743321682, 1.901968864685688, -1.2376267641923608, -3.408545123401, 2.253880270442582, 2.0063611456891824e-08, 3.1037654417830063, -1.5707960904568827, -2.090080076719026, 0.14389680984632744, 1.3357153765160583, -0.41783829564670527, 2.6034352294319065, -1.324966395420215, -2.0225817862582417e-08, 1.5707963616629272, 2.2789061736724596e-07, 1.7594932474705596, 2.4042586134438113, -1.1656681483050135, 2.3566416942105377, -2.854673522402093, -1.8432207611797033, 3.635810849452397e-08, 3.141592569566812, -5.3348121341282906e-08, -1.9377700566431013, -1.2800748596700036, 1.849746489826679, 1.8377498919846766, -0.40266313165243656, 2.5547284306745266, -3.509615544044705e-08, -2.079462588418919, -1.8836625443022954, 1.8896186474679284, 3.8892812555041862, 1.7525798942642672, -2.3855814658291172, -2.9760305250443757, 3.6834551129154587, -3.1561251290263046, 1.6086237511221089, -1.403799890942264, -0.02248442416144244, 3.5557783923992803, -0.19918889843991072, 1.947985296057119, 2.283689153335069, 2.95942477229338, -2.2342764049348594, 1.5707963984098483, -1.527384272794375, 2.01324422918368, 2.887135039180836, -0.5590009098816004, -3.1406846250305125, -0.5872155351255369, 0.012142055214656377, 1.5707963058104557, -3.141592697740147, 0.6561723332917142, -0.6954794933142203, 2.3967396798890768, -3.1933704949817265, -2.0421460233026942, -0.9429819203552213, -1.5707963421330577, -1.5707964775932113, -3.141592681540854, -3.141592534923821, -2.117056306587984, 3.495600103760745, -0.049345883754263326, 1.513416834727593, -1.5707963066373931, -1.5707963150782256, -0.8956133094925696, 3.141592637620832, -1.570796281345781, -1.5477522076368044, 1.1960030792492413, -1.1315448870800235, -1.5707963388694115, -3.141592656357241, 3.141592637113838, 2.978996674866196, -1.2704257727861481e-08, 2.2148530463466503, -3.4020581675948685, -1.9074553840001014, 2.9586536555234813, -1.5707962939673148, 1.570796348146609, 2.4700589986735237, 1.5707962656376284, 2.700696441813629, -0.6624478877191317, 1.5707963816042791, -1.218818407051909, -2.9586536618301578, 2.966065236349468e-10, -3.1415926875234934, -1.89424124984683e-08, -1.570796404469884, -1.5707962995518292, 1.570796494898687, -1.5707964716573868, 1.0481328754185399e-07],
+    ),
+    (9, 4): dict(  # 29 layers = 59 moments, 96 CZ, path, seed 1
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6), (0, 7), (0, 8)],
+        cz_layers=[[(2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (7, 8)], [(0, 1), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(2, 3), (4, 5)], [(1, 2), (5, 6)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (2, 3), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(2, 3), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(2, 3), (4, 5), (6, 7)], [(1, 2), (3, 4), (5, 6)], [(0, 1), (4, 5), (6, 7)], [(3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7)]],
+        params=[-0.0355165745594035, -2.113399795330426, -0.4420526632519006, -1.9447032748573814, -2.8102666310096103, -0.7968023664905989, -3.6681216130163845, 3.1415922767829776, -2.152250338899764, -1.0288644717430804, 1.5115045612728424, -4.317074410355889, -1.582939538912061, 1.2190270363388633, 0.858477194290343, 2.363980329745866, -2.7156616684045235e-07, -0.6073718500371651, -2.077211611729034, 3.046968339769548, -2.4891351602499805, 2.3034495795560814, 2.578375724699927, 2.754571090617905, -1.6936237892129586, -3.1415926658572344, -0.17253142097864216, 0.07301745616099434, -0.400901402725558, 0.6057381811953028, -0.20722677003250095, 2.4838173295128323, -1.6792485721033503, 2.1541352572220123, 8.622752064870498e-07, 0.26050301596749204, 3.068575037256322, 2.0893927882435155, 3.0957289554685117, 0.5262504751410393, -0.41819881149493204, -1.3404662866378834, 1.7971642127915144, 3.141593826633575, 0.48719571569821307, -2.206400215769979, 2.4813824433385268, 2.285317127562769, 3.8791316180080506, -0.8061963510492687, 0.876540658267183, -0.2741699075493284, 3.164232040306327e-07, 0.2393278726444137, 2.2064001179246486, -1.9400701744570126, 2.0829436896000812, 0.625342363287068, 3.674712760190244, 1.3081951907389566, -2.286443939366753, 4.659707597477809e-07, -0.2806726252069503, -0.42294804806764236, -2.8840086415215196, -2.8541750091543223, 4.223051174487238, -2.713122538663334, 0.9960462870245311, 0.3060558631323418, -1.5149762032971843, -0.3030955620616355, 1.4393670422667402, 4.345884662944481, -0.23778251241422454, 4.624094668493984, -0.1325641046400025, -0.8340856466378345, -0.750213225668168, 2.6267244283268454, -3.381618312829822, -1.7589755727174305, -0.24036008486509916, -1.8160514122911329, -0.0203064534771262, -1.8420128551588575, -0.10224232522256091, -0.5287109830920547, 3.350069501890531, -2.7472503868825306, -3.482475751164598, 3.502534942331501, 6.483130058206815, -0.7944487951257283, 2.6215226892272834, -1.7048046796234109, -0.2196786930537103, -3.0046712673723803, -1.7678836158016997, -3.4713416374699486, -1.205763511268312, 1.5066107487712488, -0.03382344441023763, -3.163567989550724, -2.146095088279455, -3.141592752703775, 1.5600336722009103, -2.8136277209067724, -2.811843973348171, -1.6881737033072177, 3.1415925958215145, -3.4748200345629603, -0.6111343263315813, -4.309900573082137, 1.8877687281448225e-07, 1.2818089060030506, -1.364442848452237, -0.5928313842264222, 3.3599531710537773, 6.698919826062732e-08, -2.183679305605427, -1.0446958428668287, -1.104541476266491, -4.712388750588753, -1.76678864116294, 1.2858068719191533, -2.548761211364762, -0.384743907022767, -3.141592701701931, -1.725085631468547, 0.1670415437654831, -4.2453077354893426e-07, 1.5707962576091787, -0.9867211164728338, 0.4537851456169263, 0.2398834571744391, -1.9358290656753807, -3.1415926990613, 4.473447346183858, 1.065482085240338, -1.5707960104761594, -7.46623147361051e-08, 2.4617887514864933, -0.931594512247187, -0.9802034074728295, 1.5187083933960206, 3.296423897010689, -0.734206711750977, -1.9875759582608967, 1.5707963044603768, -3.329575046725478, -0.10828209276332114, -2.782425962247451, -0.6617919399238053, -0.06528941492406636, -4.426159023634988, -0.5440762193287425, -1.9964232130729045, 5.461681472644883e-08, 0.23773973661097406, -0.1516420591810425, 2.8762861110194495, -1.6228864269785384, -2.481250271146091, -1.7303210890844225, 1.4691045871844173, 2.4322395140807673, 3.141592566102439, 1.8781230010338759, -0.41847558590656386, -1.5045252559508706, -0.8560848568698768, -0.6603424040251015, -0.21986610960605674, -3.4491524376643063, -3.633086788355054, 3.2867624836526244e-08, 1.2794650101091312, 2.890821532591501, -1.029500315575698, -1.446785644103006, -1.1786324132965778, -1.7028611378213805, -0.7338999927953203, -1.082192782160034, 1.0264300095030337e-08, 3.6457543716650624, -1.5632590143569907, 1.447017463303222, -1.7881836454892972, 1.5707963251365311, 1.066810571884647, 2.3001524992089717, -1.3425209992349383, -1.570796249652527, 3.128625034910125, -1.5426356096814549, 0.8735370988984155, -0.8094144920412416, 0.2117857599299609, -1.5707964187492378, 0.03379255829795551, -0.276826961515978, -1.5707964421512932, -3.141592783026765, -3.1767546813237324, 1.2751369467958324, 2.340697658242088, 2.929806856128848, 4.7123889238482315, -3.141592536299858, 7.717123082300163e-08, 3.1415926143519495, 3.1415928602031307, -3.2158150744280514, -1.5471254334732054, -0.36785638556353695, -1.4868649140640313, -0.8726809891223719, -2.2841574478737585, 1.5707963431680778, 1.5707963194490924, -3.141592640962417, -3.0737863775846463, 0.3318524658301252, -3.7934060326777757, 1.5707967478141998, -2.3612604927793246, -0.8574351801021035, 1.5707963500752744, -1.570796398591544, -9.946688067676532e-08, 3.1475946190693302, -4.772908863554884, -2.4897790741148715, 0.7853976658250416, -3.307948945643765, -1.570796342376325, 3.894902915719161e-08, -1.5707963867017807, 2.511170306730496e-07, -1.4686978398653505, 1.513790587680783, 2.388534771230824, -2.440125945767832, 1.5707963289361984, -1.5707962639859003, -2.81561635530493, 1.5707962635157597, -3.141592939905929, 0.8797335905475038, 2.505351220331387, -0.8177386821293402, -1.5707962960860418, -3.1415926509894923, 3.1415922544212798, -0.07535413313449632, -2.041685575836614, -4.633372684910004, 0.9957448752512761, 0.18052297739598022, 3.141592716868153, -1.570796251447409, -1.5707962611508905, 1.0046108695376698e-07, 1.5707964129001224, 1.5707965247998064, 1.545595164545577, 0.04028772755661471, -3.2921758105925454],
+    ),
+    (10, 2): dict(  # 14 layers = 29 moments, 42 CZ, path, seed 0
+        coords=[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6), (0, 7), (0, 8), (0, 9)],
+        cz_layers=[[(2, 3), (4, 5)], [(1, 2), (3, 4), (5, 6)], [(2, 3), (6, 7), (8, 9)], [(7, 8)], [(0, 1), (4, 5), (6, 7), (8, 9)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (4, 5), (6, 7), (8, 9)], [(7, 8)], [(2, 3), (6, 7), (8, 9)], [(1, 2), (3, 4), (5, 6), (7, 8)], [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)], [(1, 2), (5, 6), (7, 8)], [(0, 1), (4, 5), (6, 7), (8, 9)], [(5, 6)]],
+        params=[1.0235638848013602, 0.977016221591055, 1.5707971374965688, -1.5708030640452753, -4.983936552238138, 4.067357946464657, -0.6221975919450415, -2.401550882960143, -1.1104858187797129, -2.174131541231062, -3.260078885103753, -2.5478203600244256, 4.27694544741121, -1.5425922459704666, 2.1584331798786502, 3.3139515322722297, -0.9485988739069242, -0.48729185747092424, 3.0472348706940093, 2.0244762676147654, 1.6164735477727965, -0.9118662374307742, 3.1415926487124253, 3.6052402604600053, -2.688818883041796, -3.1415927526990957, -1.383884542750605, 2.1955010074155457, -0.044445724707668416, -2.285540442245511, 1.870798034157011, 5.044691887841973, 3.2641773067712667, -4.71240071308949, -0.9768327118920523, 1.8336546420939785, -0.3702568817530475, -0.6847192565970504, 1.0958441981825295, 0.12452674948786714, 0.3200234018887743, -0.2058349144791369, 1.6807109586716105, -3.141588103914266, 2.0948542144877904, 1.3079380792043487, 1.7966119799676827, 3.1415927308278704, 3.630408441281055, 0.6034698341583467, -1.9798331809285754, 3.1415926571217816, 0.5528986772890678, 5.799122773877109e-06, 5.862651008396124, 4.7123889563397166, 1.7565176794733506e-07, -1.511379964128182, -0.16516037289143562, 3.593661616374934, -1.777239165295953, -3.757072581499117, -0.9654547025923154, 0.4966034306020414, -1.150262024776822, 3.8263118218064247, 1.5707973902365417, 3.141592949480301, -3.038376509985927, 0.7986737763288826, 0.15198029374046168, 4.712715567171463, -3.7457321412056834, -2.1696834460848096, -1.4965070760581864e-08, -1.29687210507983, -0.62684181231259, -0.8860765016783796, -1.5707955814357801, -0.5872985407927676, -1.0366356475397653, -0.220745751206842, 1.0459952144424156, -4.610105308879532, 3.019645744533349, 1.0686325188730703, 0.6268418201363403, 1.5707964703830417, -2.300523923727215, 3.1134104795138446, -0.521077760714736, -1.9658573251787281, 2.0943947127749665, -2.2639112798587637e-08, -1.4488493828053697, -0.6578375654797661, 3.141592674953143, 1.5707958344000814, 3.1571949399289354e-07, 2.1490376434534784, -2.521237829094025, 2.1862757401838304, -3.1415924280623218, -1.5707963467891355, -3.5223568497358846, 4.712388219328816, 1.1502620249586994, -1.5707960909040133, -1.5707964471565534, -0.5782410177228715, 2.297692151885758, -3.141592970742759, 1.5707962984033432, -0.5505288552072741, 1.0293287628667382, -5.627127449368332e-08, 1.5707956760649124, -2.034443895950092, -3.1415927528929264, -0.677394159468336, -3.083090790836056, -1.57079631563633, 0.8259513532434074, 0.08501406968209042, -1.0293288470103548, 7.562351708853634e-08, -3.1415926023712717, 9.81866794344351e-07, -2.3561944740809113, -3.2495970708551627, 1.7070698374192599, 1.6398684930862406, 1.9453410004675737, 1.3160319495257298, -2.742026888191624, 1.570797362091736, 2.356194569135902, 0.5881246641864322, -1.396282412702495, 2.015173312712346, -1.7070697911813888, 3.072520532328564, 1.9410966579813593, -2.421313456368587, 1.551994789999467, -1.5707968913092298, 4.65978725504196e-07, 0.9826723823090802, -0.17451388992095146, 2.697215516633311],
+    ),
+}
+# END BONUS SYNTH TABLE
+
+
+def _thermometer_ops(reg, tails, kk, order):
+    """sum_j sqrt(P(j)) |1^j 0^(kk-j)> on reg[0..kk-1] = r_1..r_kk, where tails[u] = P(j >= u).
+
+    'bottom_up' is Bryan's chain: r_1 first, then r_u from r_(u-1) with one known-target CZ per
+    bit, so r_1, r_2 are ready first (what the arm that receives the rung copies needs).
+    'top_down' builds r_kk first, then r_u = 1 if r_(u+1) = 1 (CNOT) else Ry with
+    P(j = u) / P(j <= u) on the still-|0> target through an inverted control (one CZ). Two CZs
+    per bit, but r_kk, r_(kk-1) are ready after two bits, which is what the thermometer arm's
+    own first sweep needs. The dispatcher tries both and keeps the shallower circuit.
+    """
+    ops = []
+    if order == 'bottom_up':
+        for u in range(1, kk + 1):
+            if tails[u] <= 1e-15:  # j >= u impossible: r_u and all later bits stay |0>
+                break
+            if u == 1:
+                ops.append(_u(reg[0], _RY(_split_angle(tails[1]))))
+            else:
+                ops += _cry_on_zero(reg[u - 2], reg[u - 1], _split_angle(tails[u] / tails[u - 1]))
+        return ops
+    top = max((u for u in range(1, kk + 1) if tails[u] > 1e-15), default=0)
+    if top == 0:
+        return ops
+    ops.append(_u(reg[top - 1], _RY(_split_angle(tails[top] - tails[top + 1]))))  # P(j = top)
+    for u in range(top - 1, 0, -1):
+        p_le = 1.0 - tails[u + 1]  # P(j <= u)
+        p_eq = tails[u] - tails[u + 1]  # P(j = u)
+        if p_le <= 1e-15 or p_eq >= p_le - 1e-15:  # r_u is 1 whatever r_(u+1) is
+            ops.append(_u(reg[u - 1], _BRYAN_X))
+            continue
+        ops += _cnot(reg[u], reg[u - 1])  # r_(u+1) = 1  ->  r_u = 1
+        if p_eq > 1e-15:  # r_(u+1) = 0  ->  rotate r_u, which is still |0> in that branch
+            ops += [_u(reg[u], _BRYAN_X)]
+            ops += _cry_on_zero(reg[u], reg[u - 1], _split_angle(p_eq / p_le))
+            ops += [_u(reg[u], _BRYAN_X)]
+    return ops
+
+
+def _rung_copy_ops(left, right, tails, k):
+    """l_(k+1-u) = NOT r_u across the ladder rungs (Bryan's rung copy, factored out)."""
+    a, b = len(left), len(right)
+    ops = []
+    for u in range(1, k + 1):
+        v = k + 1 - u
+        if v > a:
+            continue
+        if u > b or tails[u] <= 1e-15:  # r_u is always 0, so l_v is always 1
+            ops.append(_u(left[v - 1], _BRYAN_X))
+        elif tails[u] < 1 - 1e-15:  # r_u genuinely random: copy its complement
+            ops += _cnot(right[u - 1], left[v - 1]) + [_u(left[v - 1], _BRYAN_X)]
+    return ops
+
+
+def _tail_block_ops(prefix, entry):
+    """A synthesized Ry + CZ block (experiments/tail_synth.py) as instructions on `prefix`."""
+    layers, params = entry
+    m0 = len(prefix)
+    th = np.array(params).reshape(-1, m0)
+    ops = []
+    for l in range(len(th)):
+        ops += [_u(prefix[i], _RY(th[l, i])) for i in range(m0)]
+        if l < len(layers):
+            ops += [_cz(prefix[i], prefix[j]) for i, j in layers[l]]
+    return ops
+
+
+def _dicke_unitary_ops_tail(path, k, m0):
+    """Bryan's B-E unitary on `path`, with the sweeps for the last m0 positions replaced by one
+    synthesized block: after deciding positions N..m0+1, path[:m0] holds |0^(m0-r) 1^r> for
+    r <= min(k, m0), and _TAIL[(m0, min(k, m0))] maps every such input to |D^(m0)_r>. The
+    sweeps there are strictly serial (41 moments for m0 = 4, k >= 4); the block is shallower."""
+    N = len(path)
+    k = min(k, N)
+    entry = _TAIL.get((m0, min(k, m0))) if 0 < m0 < N else None
+    if entry is None:
+        return dicke_unitary_ops(path, k)
+    ops = []
+    for m in range(N, m0, -1):
+        kk = min(k, m - 1)
+        ops += _scs_ops(list(path[m - 1 - kk: m]), m, all_ones_possible=(k >= m))
+    return ops + _tail_block_ops(list(path[:m0]), entry)
+
+
+def _split_ops_bonus(left, right, k, order='bottom_up', m0_left=0, m0_right=0):
+    """Bryan's two-arm split (split_ops) with a selectable thermometer order and synthesized
+    arm tails. The thermometer lives on `right`; swap the arguments to put it on the other arm
+    (the rung pairs l_(k+1-u) <-> r_u are the same set either way)."""
+    a, b = len(left), len(right)
+    N = a + b
+    P = [math.comb(b, j) * math.comb(a, k - j) / math.comb(N, k) if (0 <= k - j <= a and j <= b) else 0.0
+         for j in range(k + 1)]
+    tails = [sum(P[u:]) for u in range(k + 2)]
+    ops = _thermometer_ops(right, tails, min(k, b), order)
+    ops += _rung_copy_ops(left, right, tails, k)
+    ops += _dicke_unitary_ops_tail(list(reversed(right)), min(k, b), m0_right)
+    ops += _dicke_unitary_ops_tail(list(reversed(left)), min(k, a), m0_left)
+    return ops
+
+
+def _bonus_layout(N, k, cal, p_exc):
+    """One ladder-plus-arms layout on the ideal device. Depth does not depend on where the
+    arms sit (uniform device, compile_layers only looks at qubit identity), so one is enough."""
+    a, b = N // 2, N - N // 2
+    ew, nw = path_profile(b, k)
+    w_edge = sum(ew) / max(len(ew), 1)
+    w_node = sum(nw) / max(len(nw), 1)
+    for _, left0, right0 in ladder_candidates(cal, k, p_exc, w_edge, w_node)[:4]:
+        used = set(left0) | set(right0)
+        for _, right in extend_path(cal, right0, b, used, p_exc, w_edge, w_node)[:1]:
+            for _, left in extend_path(cal, left0, a, used | set(right), p_exc, w_edge, w_node)[:1]:
+                return list(left), list(right)
+    return None
+
+
+def _bonus_split_variants(N, n, cal):
+    """Every split variant (thermometer arm and order, tail block per arm) as (circuit, qubits, label)."""
+    k = min(n, N - n)
+    flip = n > N - n
+    layout = _bonus_layout(N, k, cal, n / N)
+    if layout is None:
+        return []
+    left, right = layout
+    out = []
+    for L, R in ((left, right), (right, left)):
+        kL, kR = min(k, len(L)), min(k, len(R))
+        mL = [0] + sorted(m0 for (m0, r) in _TAIL if m0 < len(L) and r == min(kL, m0))
+        mR = [0] + sorted(m0 for (m0, r) in _TAIL if m0 < len(R) and r == min(kR, m0))
+        side = 'right' if R is right else 'left'
+        for order in ('bottom_up', 'top_down'):
+            for m0L in mL:
+                for m0R in mR:
+                    ops = _split_ops_bonus(L, R, k, order, m0L, m0R) + (_x_all(L + R) if flip else [])
+                    circ = pack_earliest(compile_layers(ops, dd=False))
+                    out.append((circ, L + R, f'split:{order}:therm={side}:m0={m0L},{m0R}'))
+    return out
+
+
+def _bonus_synth_variant(N, n, cal):
+    """A whole-state synthesized circuit picked for depth (_BONUS_SYNTH), placed on the device."""
+    k = min(n, N - n)
+    flip = n > N - n
+    entry = _BONUS_SYNTH.get((N, k))
+    if entry is None:
+        return None
+    g = _usable_graph(cal['cz_pauli_error_rate'], cal['sq_pauli_error_rate'])
+    qs = _place_synth(g, entry, n, cal['sq_pauli_error_rate'], cal['zero_errors'], cal['one_errors'])
+    if qs is None:
+        return None
+    logical = _synth_circuit(entry, qs)
+    if flip:
+        logical.append(cirq.X.on_each(*qs))
+    return _pack(_to_cz_phxz(logical)), list(qs), 'synth-depth'
+
+
+def _aanha_grow_tree(root, N, adj):
+    """Broadcast tree by maximum matching, round by round (ported from Aanha's w_tree.py,
+    origin/Aanha @ 01b2f24, with uniform costs). Returns rounds: list of [(parent, child), ...]."""
+    used = {root}
+    holders = [root]
+    rounds = []
+    while len(used) < N:
+        g = nx.Graph()
+        for h in holders:
+            for r in adj[h]:
+                if r not in used:
+                    g.add_edge(('h', h), ('f', r), weight=1.0)
+        if g.number_of_edges() == 0:
+            return None
+        pairs = []
+        for a, b in nx.max_weight_matching(g, maxcardinality=True):
+            if a[0] == 'f':
+                a, b = b, a
+            pairs.append((a[1], b[1]))
+        pairs.sort(key=lambda p: (str(p[0]), str(p[1])))
+        pairs = pairs[:N - len(used)]
+        for _, c in pairs:
+            used.add(c)
+        holders += [c for _, c in pairs]
+        rounds.append(pairs)
+    return rounds
+
+
+def _aanha_tree_circuit(root, rounds):
+    """|W_N> on a broadcast tree, five mixed moments per round (ported from Aanha's w_tree.py).
+    Its staggered rounds pack one to two moments shallower than our trees on the bonus metric."""
+    children = {root: []}
+    for rnd in rounds:
+        for p, c in rnd:
+            children.setdefault(p, []).append(c)
+            children.setdefault(c, [])
+    size = {}
+
+    def sz(v):
+        if v not in size:
+            size[v] = 1 + sum(sz(c) for c in children[v])
+        return size[v]
+
+    sz(root)
+    remaining = dict(size)
+    moments = []
+    first = True
+    for rnd in rounds:
+        m1, m2, m3, m4, m5 = [], [], [], [], []
+        for p, c in rnd:
+            frac = size[c] / remaining[p]
+            theta = 2 * math.asin(math.sqrt(frac))
+            if first:  # root and first child both start in |0>: child = Ry|0>, root = NOT child
+                m1.append(cirq.ry(theta).on(c))
+                m2.append(cirq.H(p))
+                m3.append(cirq.CZ(c, p))
+                m4.append(cirq.PhasedXZGate.from_matrix(cirq.unitary(cirq.X) @ cirq.unitary(cirq.H)).on(p))
+            else:  # controlled Ry on a fresh |0> target (1 CZ), then CNOT child -> parent
+                m1.append(cirq.ry(-theta / 2).on(c))
+                m2.append(cirq.CZ(p, c))
+                m3.append(cirq.ry(theta / 2).on(c))
+                m3.append(cirq.H(p))
+                m4.append(cirq.CZ(c, p))
+                m5.append(cirq.H(p))
+            remaining[p] -= size[c]
+        if first:
+            moments += [cirq.Moment(m1 + m2), cirq.Moment(m3), cirq.Moment(m4)]
+            first = False
+        else:
+            moments += [cirq.Moment(m1), cirq.Moment(m2), cirq.Moment(m3), cirq.Moment(m4), cirq.Moment(m5)]
+    qubits = [root] + [c for rnd in rounds for _, c in rnd]
+    return cirq.Circuit(moments), qubits
+
+
+def _aanha_w_variants(N, flip, cal):
+    """Aanha's broadcast W trees from every root on the ideal device, packed; (circuit, qubits, label)."""
+    adj = {q: set() for q in cal['sq_pauli_error_rate']}
+    for pair in cal['cz_pauli_error_rate']:
+        a, b = tuple(pair)
+        if a in adj and b in adj:
+            adj[a].add(b)
+            adj[b].add(a)
+    out = []
+    for root in sorted(adj, key=str):
+        rounds = _aanha_grow_tree(root, N, adj)
+        if rounds is None:
+            continue
+        circ, qs = _aanha_tree_circuit(root, rounds)
+        if flip:
+            circ.append(cirq.X.on_each(*qs))
+        out.append((_pack(circ), list(qs), 'aanha-tree'))
+    return out
+
+
+def bonus_candidates(num_qubits, num_excitations) -> list:
+    """Every exact bonus candidate as (circuit, qubit_list, label). The entry point below keeps
+    the shallowest; experiments/bonus_depth.py records them all."""
+    N, n = int(num_qubits), int(num_excitations)
+    if N < 1 or not 0 <= n <= N:
+        raise NotImplementedError(f'invalid (N, n) = ({N}, {n})')
+    k = min(n, N - n)
+    cal = _uniform_calibration()
+    out = []
+    if k <= 1 or N <= 8:  # where our constructions can win (W trees, synthesized states)
+        try:
+            ours, qs = build(N, n, **cal, dd=False, bryan=False)
+            out.append((_pack(ours), sorted(qs), 'ours'))
+        except Exception:  # fall through to the other candidates
+            pass
+    try:
+        circ, qs = _bryan_create_dicke_state_adaptive(N, n)
+        out.append((circ, sorted(qs), 'bryan'))
+    except Exception:
+        pass
+    if k == 1 and N >= 2:
+        try:
+            trees = _aanha_w_variants(N, n > N - n, cal)
+            if trees:
+                out.append(min(trees, key=lambda t: len(t[0])))
+        except Exception:
+            pass
+    if k >= 2:
+        try:
+            out += _bonus_split_variants(N, n, _ideal_calibration())
+        except Exception:
+            pass
+        try:
+            v = _bonus_synth_variant(N, n, cal)
+            if v is not None:
+                out.append(v)
+        except Exception:
+            pass
+    if not out:
+        raise NotImplementedError('no construction found')
+    return out
+
+
+def create_dicke_state_adaptive(
+    num_qubits: int, num_excitations: int
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """Create a Cirq circuit that produces a Dicke state, allowing for adaptive circuits.
+
+    Non-adaptive on purpose: cirq_google.Willow105.validate_circuit rejects classically
+    controlled operations, and for N <= 15 every measurement-based scheme we costed is deeper
+    than the unitary constructions (ARCHITECTURE.md section 5). This returns the shallowest of
+    several exact unitary candidates: our constructions (W trees, whole-state synthesis),
+    Bryan's bonus solution, and two-arm split variants that choose the thermometer arm and
+    order and replace the serial end of each arm's B-E unitary by a synthesized block.
+
+    Args:
+        num_qubits: The number, N, of qubits in the Dicke state.
+        num_excitations: The number, n, of 1s in the state.
+
+    Returns:
+        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
+
+    Raises:
+        NotImplementedError: The requested (N, n) combination is not implemented.
+    """
+    circuit, qubits, _ = min(bonus_candidates(num_qubits, num_excitations), key=lambda t: len(t[0]))
+    return circuit, set(qubits)
+
+
+# =============================================================================================
+# Vendored: Bryan's solution (origin/bryan @ b94cb62, dicke_solution.py), verbatim except that
+# its imports moved to the top of this file and four names were renamed to avoid collisions:
+# _X -> _BRYAN_X, _Y -> _BRYAN_Y, create_dicke_state -> _bryan_create_dicke_state,
+# create_dicke_state_adaptive -> _bryan_create_dicke_state_adaptive.
+# build() dispatches to it where it measured better (experiments/results/vs_bryan.csv).
+# Its explanatory notebook cells (derivations of every block) are in docs/bryan_constructions.md.
+# =============================================================================================
+
+
+_I2 = np.eye(2, dtype=complex)  # identity
+_BRYAN_X = np.array([[0, 1], [1, 0]], dtype=complex)  # Pauli X
+_BRYAN_Y = np.array([[0, -1j], [1j, 0]], dtype=complex)  # Pauli Y
+_H = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)  # Hadamard
+_S = np.diag([1, 1j]).astype(complex)  # phase gate S = sqrt(Z)
+
+
+def _RY(theta):
+    """R_y(theta) = exp(-i theta Y / 2): real rotation, |0> -> cos(theta/2)|0> + sin(theta/2)|1>."""
+    c, s = math.cos(theta / 2), math.sin(theta / 2)  # half-angle cosine and sine
+    return np.array([[c, -s], [s, c]], dtype=complex)  # standard real rotation matrix
+
+
+def _RX(theta):
+    """R_x(theta) = exp(-i theta X / 2)."""
+    c, s = math.cos(theta / 2), math.sin(theta / 2)  # half-angle cosine and sine
+    return np.array([[c, -1j * s], [-1j * s, c]], dtype=complex)  # rotation about the X axis
+
+
+def _RZ(theta):
+    """R_z(theta) = exp(-i theta Z / 2)."""
+    return np.diag([np.exp(-0.5j * theta), np.exp(0.5j * theta)])  # diagonal phase rotation
+
+
+def _u(q, m):
+    """Instruction: apply the 2x2 unitary m to qubit q."""
+    return ('U', q, m)  # tuples are cheap; matrices are merged later
+
+
+def _cz(a, b):
+    """Instruction: CZ between qubits a and b (symmetric)."""
+    return ('CZ', a, b)  # the only two-qubit gate we ever emit
+
+
+def _cnot(control, target):
+    """CNOT = H_t CZ H_t (one CZ, derivation (a))."""
+    return [_u(target, _H), _cz(control, target), _u(target, _H)]  # HZH = X on the target
+
+
+def _cry_on_zero(control, target, theta):
+    """Controlled-R_y(theta), valid when target = |0> whenever control = |1> (one CZ, derivation (b))."""
+    return [_u(target, _RY(-theta / 2)), _cz(control, target), _u(target, _RY(theta / 2))]  # R_y(t/2) CZ R_y(-t/2)
+
+
+def _split_angle(p):
+    """Angle theta with sin^2(theta/2) = p, i.e. R_y(theta)|0> has |1>-probability p."""
+    return 2 * math.asin(math.sqrt(min(max(p, 0.0), 1.0)))  # clamping guards tiny float overshoots
+
+
+def _transfer(src, dst, p):
+    """|1>_src|0>_dst -> sqrt(1-p)|10> + sqrt(p)|01>, |00> -> |00> (two CZs, derivation (c))."""
+    return _cry_on_zero(src, dst, _split_angle(p)) + _cnot(dst, src)  # rotate dst, then clear src if dst took it
+
+
+def _givens(a, b, theta, middle_a=None):
+    """Givens rotation G(theta) on (a, b) with two CZs (derivation (d)).
+
+    `middle_a` optionally replaces the middle R_x(theta/2) on qubit a (used by the merged top block).
+    """
+    if middle_a is None:  # plain Givens rotation
+        middle_a = [_u(a, _RX(theta / 2))]  # the XX-part angle
+    ops = [_u(b, _S), _u(a, _RX(np.pi / 2)), _u(b, _RX(np.pi / 2))]  # W V: map XY-YX onto -(XX+ZZ)
+    ops += _cnot(a, b)  # CNOT conjugation turns X_a into X_a X_b and Z_b into Z_a Z_b ...
+    ops += middle_a + [_u(b, _RZ(theta / 2))]  # ... so these rotations become exp(-i t XX/2) exp(-i t ZZ/2)
+    ops += _cnot(a, b)  # close the CNOT conjugation
+    ops += [_u(a, _RX(-np.pi / 2)), _u(b, _RX(-np.pi / 2)), _u(b, _S.conj().T)]  # undo W and V
+    return ops
+
+
+def _g3(c, a, b, theta):
+    """Moving-hole gate on (c, a, b): partial move a->b if c=0, full move if c=1 (five CZs, derivation (e))."""
+    al = (theta + np.pi) / 4  # alpha in the derivation
+    be = (theta - np.pi) / 4  # beta in the derivation
+    ops = _cnot(a, b)  # afterwards b = 1 implies a = 0, enabling known-target rotations of a
+    ops += [_u(a, _RY(-al)), _cz(c, a), _u(a, _RY(-be)), _cz(b, a), _u(a, _RY(be)), _cz(c, a), _u(a, _RY(al))]  # M
+    ops += _cnot(a, b)  # map |a=1,b=1> back to |a=1,b=0>, completing the excitation move
+    return ops
+
+
+def _top_block(a, b, c, p_top, p_next):
+    """Merged first two steps of an SCS sweep on a line a-b-c, four CZs (derivation (f)).
+
+    Domain {000, 001, 011} (qubit order a, b, c). The excitation on c moves to b with probability p_next
+    when the input is 001, and to a with probability p_top when the input is 011.
+    """
+    t2 = _split_angle(p_top)  # rotation for the 011 branch (landing site a)
+    t1 = _split_angle(p_next)  # rotation for the 001 branch (landing site b)
+    ops = _cry_on_zero(b, a, t2)  # step 1: only 011 has b = 1, and there a = 0
+    middle = [_u(b, _RX((t1 - np.pi) / 2)), _cz(a, b), _u(b, _RX(np.pi / 2))]  # step 2: Z_b inserted iff a = 1
+    ops += _givens(b, c, t1, middle_a=middle)  # Givens on (b, c) with the modified middle layer
+    ops += [_u(a, _S)]  # step 3: cancel the -i phase acquired by the a = 1 branch
+    return ops
+
+
+def _scs_ops(window, m, all_ones_possible):
+    """SCS_m on window = [p_k, ..., p_1, p_0] (p_0 = position m) as a nearest-neighbour sweep."""
+    k = len(window) - 1  # window size minus one = largest number of excitations handled
+    if k == 1:  # a single partial move = Givens rotation (it also fixes |11>)
+        return _givens(window[0], window[1], _split_angle((m - 1) / m))  # move the hole with probability (m-1)/m
+    ops = []  # accumulated instructions
+    i = k  # current hole index: branch r = i has its hole at p_i
+    if not all_ones_possible:  # the merged top block needs p_k = 0 on every input
+        ops += _top_block(window[0], window[1], window[2], (m - k) / m, (m - k + 1) / m)  # branches r = k and k-1
+        i = k - 2  # the block already performed the top two sweep steps
+    while i >= 1:  # remaining sweep steps, top to bottom
+        theta = _split_angle((m - i) / m)  # branch r = i moves its hole with probability (m-i)/m
+        if i == k:  # very first step of an unmerged sweep: no "in transit" control yet
+            ops += _givens(window[0], window[1], theta)  # partial move p_k <-> p_{k-1}
+        else:  # generic step: the control is the site above the hole position
+            ops += _g3(window[k - i - 1], window[k - i], window[k - i + 1], theta)  # (c, a, b) = (p_{i+1}, p_i, p_{i-1})
+        i -= 1  # move one site towards the head p_0
+    return ops
+
+
+def dicke_unitary_ops(path, k):
+    """BE unitary on `path`: maps |0^{N-r} 1^r> (ones at the END of the list) to |D^(N)_r> for every r <= k."""
+    N = len(path)  # number of positions
+    k = min(k, N)  # cannot hold more excitations than qubits
+    ops = []  # accumulated instructions
+    for m in range(N, 1, -1):  # decide positions N, N-1, ..., 2 (position 1 is then determined)
+        kk = min(k, m - 1)  # the window reaches back k sites, but not past position 1
+        ops += _scs_ops(list(path[m - 1 - kk: m]), m, all_ones_possible=(k >= m))  # all-ones input reachable iff k >= m
+    return ops
+
+
+def dicke_path_ops(path, k):
+    """|D^(N)_k> on a path: X on the last k sites, then the BE unitary."""
+    return [_u(q, _BRYAN_X) for q in path[len(path) - k:]] + dicke_unitary_ops(path, k)  # |0^{N-k}1^k>, then U_N
+
+
+def split_ops(left, right, k):
+    """Two-arm construction (Section 2.3).
+
+    left = [l_1, ..., l_a], right = [r_1, ..., r_b]; l_1 and r_1 are the arm heads.
+    Ladder requirement: l_{k+1-u} must neighbour r_u for every rung that is actually used.
+    """
+    a, b = len(left), len(right)  # arm lengths
+    N = a + b  # total number of qubits
+    P = [math.comb(b, j) * math.comb(a, k - j) / math.comb(N, k) if (0 <= k - j <= a and j <= b) else 0.0
+         for j in range(k + 1)]  # hypergeometric law of j = number of excitations in the right arm
+    tail = [sum(P[u:]) for u in range(k + 2)]  # tail[u] = P(j >= u)
+    ops = []  # accumulated instructions
+    for u in range(1, min(k, b) + 1):  # thermometer chain r_1 ... r_k
+        if tail[u] <= 1e-15:  # j >= u impossible: r_u stays |0>, and so do all later r's
+            break  # nothing more to prepare
+        if u == 1:  # first bit from scratch
+            ops.append(_u(right[0], _RY(_split_angle(tail[1]))))  # P(r_1 = 1) = P(j >= 1)
+        else:  # later bits conditioned on the previous one (known |0> target)
+            ops += _cry_on_zero(right[u - 2], right[u - 1], _split_angle(tail[u] / tail[u - 1]))  # P(j>=u | j>=u-1)
+    for u in range(1, k + 1):  # rung copies l_{k+1-u} = NOT r_u
+        v = k + 1 - u  # left index paired with r_u
+        if v > a:  # left arm too short: this left bit does not exist (then r_u is always 1)
+            continue  # nothing to write
+        if u > b or tail[u] <= 1e-15:  # r_u is always 0, so l_v is always 1
+            ops.append(_u(left[v - 1], _BRYAN_X))  # deterministic bit, no CZ needed
+        elif tail[u] < 1 - 1e-15:  # r_u genuinely random: copy its complement across the rung
+            ops += _cnot(right[u - 1], left[v - 1]) + [_u(left[v - 1], _BRYAN_X)]  # l_v = 1 XOR r_u
+        # otherwise r_u is always 1 and l_v correctly stays |0>
+    ops += dicke_unitary_ops(list(reversed(right)), min(k, b))  # BE on the right arm (head r_1 = last element)
+    ops += dicke_unitary_ops(list(reversed(left)), min(k, a))  # BE on the left arm; runs in parallel
+    return ops
+
+
+def _subtree_sizes(root, children):
+    """Subtree sizes s(v) for a rooted tree given as {node: [children]}."""
+    order = [root]  # BFS order
+    for v in order:  # the list grows while we iterate
+        order.extend(children.get(v, []))  # append children
+    size = {}  # node -> subtree size
+    for v in reversed(order):  # leaves first
+        size[v] = 1 + sum(size[c] for c in children.get(v, []))  # itself plus its children's subtrees
+    return size
+
+
+def w_tree_ops(root, children):
+    """|W_N> on a rooted tree with 2N-3 CZs (Section 2.1)."""
+    size = _subtree_sizes(root, children)  # s(v)
+    kids = children.get(root, [])  # root's children in serving order
+    if not kids:  # single qubit: |W_1> = |1>
+        return [_u(root, _BRYAN_X)]  # just flip it
+    first = kids[0]  # first child, served with the 1-CZ product-state split
+    p = size[first] / size[root]  # probability that the excitation goes to the first child's subtree
+    ops = [_u(root, _RY(_split_angle(1 - p)))]  # root = sqrt(p)|0> + sqrt(1-p)|1>
+    ops += _cnot(root, first) + [_u(first, _BRYAN_X)]  # -> sqrt(p)|01> + sqrt(1-p)|10>
+    stack = [root]  # depth-first traversal keeps every qubit's instruction order valid
+    while stack:  # visit every node once
+        v = stack.pop()  # current owner of an excitation
+        remaining = size[v] - (size[first] if v == root else 0)  # mass still owned by v
+        for c in children.get(v, []):  # serve the children in order
+            if v == root and c == first:  # already served by the 1-CZ split
+                continue  # skip it
+            ops += _transfer(v, c, size[c] / remaining)  # hand child c its share
+            remaining -= size[c]  # v now owns less
+        stack.extend(reversed(children.get(v, [])))  # children then process their own subtrees
+    return ops
+
+
+def _is_identity(u, atol=1e-9):
+    """True if u is the identity up to a global phase."""
+    phase = u[0, 0] if abs(u[0, 0]) > 0.5 else 1.0  # an identity-like matrix has |u00| ~ 1
+    return np.allclose(u / phase, _I2, atol=atol)  # compare after removing the phase
+
+
+def _phxz(q, u):
+    """Native gate for an arbitrary single-qubit unitary."""
+    return cirq.PhasedXZGate.from_matrix(u).on(q)  # exact up to a global phase
+
+
+def compile_layers(ops, dd=True):
+    """Instruction list -> cirq.Circuit with alternating PhasedXZ / CZ moments (ALAP, optional DD)."""
+    pending = {}  # qubit -> product of 1q matrices since its last CZ
+    last = {}  # qubit -> index of its most recent CZ node
+    nodes = []  # CZ nodes: qubits, pre-gates, DAG edges
+    for kind, a, b in ops:  # walk the instructions in program order
+        if kind == 'U':  # single-qubit matrix b on qubit a
+            pending[a] = b @ pending.get(a, _I2)  # left-multiply: later gates act after earlier ones
+            continue  # nothing else to do
+        nodes.append({'qubits': (a, b),  # a CZ node
+                      'pre': {a: pending.pop(a, None), b: pending.pop(b, None)},  # 1q gates right before it
+                      'preds': {last[q] for q in (a, b) if q in last},  # CZs that must come first
+                      'succs': set()})  # filled below
+        last[a] = last[b] = len(nodes) - 1  # this CZ is now the latest on both qubits
+    trailing = pending  # 1q gates after a qubit's last CZ (or the only gates of CZ-free qubits)
+    for i, nd in enumerate(nodes):  # build successor lists
+        for p in nd['preds']:  # every predecessor ...
+            nodes[p]['succs'].add(i)  # ... points forward to i
+    asap = [0] * len(nodes)  # earliest CZ layer (1-based)
+    for i, nd in enumerate(nodes):  # program order is a topological order
+        asap[i] = 1 + max((asap[p] for p in nd['preds']), default=0)  # one after the latest predecessor
+    depth = max(asap, default=0)  # number of CZ layers
+    layer = [0] * len(nodes)  # ALAP layer
+    for i in range(len(nodes) - 1, -1, -1):  # reverse topological order
+        layer[i] = min((layer[s] for s in nodes[i]['succs']), default=depth + 1) - 1  # one before the earliest successor
+    n_mom = 2 * depth + 1  # moments: 1q, CZ, 1q, CZ, ..., 1q
+    slots = [dict() for _ in range(n_mom)]  # 1q moments: qubit -> matrix
+    cz_moments = [[] for _ in range(n_mom)]  # CZ moments
+    q_layers = {}  # qubit -> list of (CZ layer, pre-gate)
+    for i, nd in enumerate(nodes):  # place the CZs
+        cz_moments[2 * layer[i] - 1].append(cirq.CZ(*nd['qubits']))  # CZ layer t lives in moment 2t-1
+        for q in nd['qubits']:  # remember each qubit's timeline
+            q_layers.setdefault(q, []).append((layer[i], nd['pre'][q]))  # its pre-gate goes right before this CZ
+    for q in set(q_layers) | set(trailing):  # every qubit that appears
+        seq = sorted(q_layers.get(q, []), key=lambda t: t[0])  # its CZs in time order
+        if not seq:  # no CZ at all: put its only gate in the final 1q moment (stay |0> as long as possible)
+            u = trailing.get(q)  # its merged gate
+            if u is not None and not _is_identity(u):  # skip identities
+                slots[n_mom - 1][q] = u  # last moment
+            continue  # done with this qubit
+        t0, u0 = seq[0]  # first CZ of this qubit
+        if u0 is not None:  # gates before the first CZ (the qubit is |0> before them, so no DD there)
+            slots[2 * t0 - 2][q] = u0  # 1q moment right before CZ layer t0
+        windows = [(seq[j][0], seq[j + 1][0], seq[j + 1][1], 'mid') for j in range(len(seq) - 1)]  # between CZs
+        windows.append((seq[-1][0], depth + 1, trailing.get(q), 'tail'))  # after the last CZ, until the end
+        for t_a, t_b, u, kind in windows:  # each idle window of an active qubit
+            moms = [2 * t for t in range(t_a, t_b)]  # its 1q moments
+            u = _I2 if u is None else u  # net single-qubit operation required in this window
+            if not dd or len(moms) < 2:  # no idle CZ layer inside (or DD disabled)
+                if not _is_identity(u):  # only emit real gates
+                    slots[moms[-1] if kind == 'mid' else moms[0]][q] = u  # just before next CZ / just after last CZ
+                continue  # next window
+            pulses = [(_BRYAN_X if i % 2 == 0 else _BRYAN_Y) for i in range(len(moms) - 1)]  # X, Y, X, Y, ...
+            acc = _I2  # running product of the pulses
+            for p in pulses:  # accumulate
+                acc = p @ acc  # later pulses act after earlier ones
+            pulses.append(acc.conj().T)  # the final slot undoes the product: window total = identity
+            if kind == 'mid':  # the real gate must act right before the next CZ
+                pulses[-1] = u @ pulses[-1]  # merge it into the final slot
+            else:  # tail window: apply the real gate first, then decouple
+                pulses[0] = pulses[0] @ u  # merge it into the first slot
+            for mom, p in zip(moms, pulses):  # emit
+                if not _is_identity(p):  # identity slots stay empty
+                    slots[mom][q] = p  # one PhasedXZ per qubit per moment
+    moments = []  # assemble the circuit
+    for i in range(n_mom):  # in time order
+        ops_i = [_phxz(q, u) for q, u in slots[i].items()] if i % 2 == 0 else cz_moments[i]  # 1q or CZ moment
+        if ops_i:  # drop empty moments
+            moments.append(cirq.Moment(ops_i))  # one homogeneous moment
+    return cirq.Circuit(moments)  # final native circuit
+
+
+T_1Q = 25e-9  # duration of a single-qubit moment (s)
+T_CZ = 42e-9  # duration of a CZ moment (s)
+T_IDLE = 60e-6  # nominal effective coherence time used to price idling (s)
+
+
+class Calibration:
+    """Pessimistic error rates and the usable coupling graph built from the four calibration dictionaries."""
+
+    def __init__(self, cz, sq, e0, e1, beta=1.0):
+        def pess(v):  # mean + beta * sigma, clipped to a sane range
+            mean, std = v  # calibration tuple
+            return float(min(max(mean + beta * std, 1e-6), 0.5))  # keeps the logarithms finite
+
+        self.sq = {q: pess(v) for q, v in sq.items()}  # usable qubits = those with single-qubit data
+        med0 = float(np.median([v[0] for v in e0.values()])) if e0 else 0.01  # fallback 0->1 readout error
+        med1 = float(np.median([v[0] for v in e1.values()])) if e1 else 0.02  # fallback 1->0 readout error
+        self.e0 = {q: pess(e0[q]) if q in e0 else med0 for q in self.sq}  # 0 -> 1 readout error
+        self.e1 = {q: pess(e1[q]) if q in e1 else med1 for q in self.sq}  # 1 -> 0 readout error
+        self.cz = {}  # frozenset pair -> CZ error
+        for pair, v in cz.items():  # only couplers whose two qubits are usable
+            a, b = tuple(pair)  # unpack (tuple or frozenset)
+            if a in self.sq and b in self.sq and a != b:  # both ends usable
+                key = frozenset((a, b))  # orientation-free key
+                self.cz[key] = min(self.cz.get(key, 1.0), pess(v))  # keep the better value if listed twice
+        self.adj = {q: set() for q in self.sq}  # adjacency of the usable graph
+        for key in self.cz:  # fill it
+            a, b = tuple(key)  # endpoints
+            self.adj[a].add(b)  # undirected ...
+            self.adj[b].add(a)  # ... edge
+
+    def edge_cost(self, a, b):
+        """-log(1 - CZ error) for coupler (a, b)."""
+        return -math.log(1 - self.cz[frozenset((a, b))])  # additive cost
+
+    def ro_cost(self, q, p):
+        """-log(1 - readout error) for a qubit that is |1> with probability p."""
+        return -math.log(1 - ((1 - p) * self.e0[q] + p * self.e1[q]))  # mixture of both error types
+
+    def sq_cost(self, q):
+        """-log(1 - single-qubit error)."""
+        return -math.log(1 - self.sq[q])  # additive cost
+
+
+def estimate_log_fidelity(circuit, cal, data_qubits, p_exc):
+    """Predicted log success probability of a compiled circuit (see the formula above)."""
+    total = 0.0  # running log-fidelity
+    first = {}  # qubit -> index of its first moment
+    durations = []  # moment durations
+    for i, moment in enumerate(circuit):  # scan the moments
+        is_cz = any(len(op.qubits) == 2 for op in moment)  # moments are homogeneous: CZ or 1q
+        durations.append(T_CZ if is_cz else T_1Q)  # its duration
+        for op in moment:  # gate errors
+            for q in op.qubits:  # remember when each qubit becomes active
+                first.setdefault(q, i)  # first occurrence only
+            if len(op.qubits) == 2:  # CZ
+                total += math.log(1 - cal.cz[frozenset(op.qubits)])  # its error
+            else:  # PhasedXZ
+                total += math.log(1 - cal.sq[op.qubits[0]])  # its error
+    cum = np.cumsum([0.0] + durations)  # cumulative time at each moment boundary
+    for q, i in first.items():  # idling from the first gate until measurement
+        total -= (cum[-1] - cum[i]) / T_IDLE  # linearised decay
+    for q in data_qubits:  # readout
+        total -= cal.ro_cost(q, p_exc)  # its error
+    return total
+
+
+def _tree_children(parent):
+    """{child: parent} -> {node: [children sorted by decreasing subtree height]}."""
+    children = {}  # node -> children
+    for v, u in parent.items():  # invert the parent map
+        children.setdefault(u, []).append(v)  # u is v's parent
+    height = {}  # memoised subtree heights
+
+    def h(v):  # height of v's subtree
+        if v not in height:  # compute once
+            height[v] = 1 + max((h(c) for c in children.get(v, [])), default=0)  # 1 + tallest child
+        return height[v]  # cached value
+
+    for v in list(children):  # order every child list
+        children[v].sort(key=lambda c: (-h(c), str(c)))  # tallest first (critical path first), deterministic ties
+    return children
+
+
+def grow_tree(cal, root, N, p_exc, depth_weight):
+    """Prim-like greedy N-node tree from `root`; returns {child: parent} or None."""
+    in_tree = {root}  # nodes already in the tree
+    parent = {}  # child -> parent
+    depth = {root: 0}  # tree depth of each node
+    heap = []  # frontier edges keyed by cost
+
+    def push(u):  # add u's frontier edges
+        for v in cal.adj[u]:  # neighbours
+            if v not in in_tree:  # only new nodes
+                c = (2 * cal.edge_cost(u, v) + cal.ro_cost(v, p_exc) + 4 * cal.sq_cost(v)
+                     + depth_weight * (depth[u] + 1))  # 2 CZs + readout + ~4 1q gates + depth penalty
+                heapq.heappush(heap, (c, str(v), v, u))  # str(v) breaks ties deterministically
+
+    push(root)  # start from the root
+    while len(in_tree) < N and heap:  # grow until N nodes
+        _, _, v, u = heapq.heappop(heap)  # cheapest frontier edge
+        if v in in_tree:  # stale entry
+            continue  # skip
+        in_tree.add(v)  # accept v
+        parent[v] = u  # reached via u
+        depth[v] = depth[u] + 1  # one level deeper
+        push(v)  # extend the frontier
+    return parent if len(in_tree) == N else None  # None if the component is too small
+
+
+def beam_paths(cal, N, edge_w, node_w, p_exc, beam=200):
+    """Beam search for low-cost simple paths of N qubits with position-dependent weights."""
+    beams = [(node_w[0] * cal.sq_cost(q) + cal.ro_cost(q, p_exc), (q,)) for q in sorted(cal.sq, key=str)]  # all starts
+    for pos in range(1, N):  # append one position at a time
+        cand = {}  # dedupe partial paths by (qubit set, end)
+        for cost, path in beams:  # expand every beam
+            u = path[-1]  # current end
+            for v in cal.adj[u]:  # possible next qubit
+                if v in path:  # simple paths only
+                    continue  # skip
+                c = cost + edge_w[pos - 1] * cal.edge_cost(u, v) + node_w[pos] * cal.sq_cost(v) + cal.ro_cost(v, p_exc)  # new cost
+                key = (frozenset(path) | {v}, v)  # equivalent partial paths
+                if key not in cand or cand[key][0] > c:  # keep the best representative
+                    cand[key] = (c, path + (v,))  # extended path
+        beams = heapq.nsmallest(beam, cand.values(), key=lambda t: t[0])  # prune
+        if not beams:  # dead end everywhere
+            return []  # no path of this length
+    return beams  # sorted best-first
+
+
+def extend_path(cal, prefix, length, forbidden, p_exc, w_edge, w_node, beam=30):
+    """Beam-search continuations of `prefix` to `length` qubits avoiding `forbidden`."""
+    beams = [(0.0, tuple(prefix))]  # start from the prefix
+    while len(beams[0][1]) < length:  # until long enough
+        cand = {}  # dedupe
+        for cost, path in beams:  # expand
+            u = path[-1]  # current end
+            for v in cal.adj[u]:  # neighbours
+                if v in path or v in forbidden:  # keep the arms disjoint and simple
+                    continue  # skip
+                c = cost + w_edge * cal.edge_cost(u, v) + w_node * cal.sq_cost(v) + cal.ro_cost(v, p_exc)  # new cost
+                key = (frozenset(path) | {v}, v)  # equivalence class
+                if key not in cand or cand[key][0] > c:  # keep the best
+                    cand[key] = (c, path + (v,))  # extended path
+        beams = heapq.nsmallest(beam, cand.values(), key=lambda t: t[0])  # prune
+        if not beams:  # cannot extend
+            return []  # failure
+    return beams  # best-first continuations
+
+
+def ladder_candidates(cal, k, p_exc, w_edge, w_node):
+    """All straight 2 x k ladders: right row r_1..r_k and a left row with l_{k+1-u} next to r_u."""
+    out = []  # (cost, left_head, right_head)
+    for q in sorted(cal.sq, key=str):  # r_1
+        for d in ((0, 1), (0, -1), (1, 0), (-1, 0)):  # direction of the right row
+            for s in ((d[1], d[0]), (-d[1], -d[0])):  # side on which the left row lies
+                right = [cirq.GridQubit(q.row + u * d[0], q.col + u * d[1]) for u in range(k)]  # r_1..r_k
+                left = [cirq.GridQubit(r.row + s[0], r.col + s[1]) for r in reversed(right)]  # l_1..l_k (reversed)
+                if any(x not in cal.sq for x in right + left):  # all qubits must be usable
+                    continue  # skip
+                edges = (list(zip(right, right[1:])) + list(zip(left, left[1:]))
+                         + [(right[u], left[k - 1 - u]) for u in range(k)])  # rows + rungs
+                if any(frozenset(e) not in cal.cz for e in edges):  # all couplers must be usable
+                    continue  # skip
+                cost = (sum(w_edge * cal.edge_cost(*e) for e in edges)
+                        + sum(w_node * cal.sq_cost(x) + cal.ro_cost(x, p_exc) for x in right + left))  # proxy cost
+                out.append((cost, left, right))  # keep
+    out.sort(key=lambda t: t[0])  # cheapest first
+    return out
+
+
+def path_profile(N, k):
+    """CZ count per edge and gate count per position of the BE construction (weights for the path search)."""
+    qs = cirq.LineQubit.range(N)  # abstract line
+    circ = compile_layers(dicke_path_ops(qs, k), dd=False)  # compile once
+    pos = {q: i for i, q in enumerate(qs)}  # qubit -> position index
+    edge_w = [0] * max(N - 1, 1)  # CZs per edge
+    node_w = [0] * N  # 1q gates per position
+    for op in circ.all_operations():  # tally
+        if len(op.qubits) == 2:  # CZ (always nearest-neighbour)
+            edge_w[min(pos[q] for q in op.qubits)] += 1  # its edge index
+        else:  # PhasedXZ
+            node_w[pos[op.qubits[0]]] += 1  # its position
+    return edge_w, node_w
+
+
+def _x_all(qubits):
+    """Instructions flipping every qubit (complement trick)."""
+    return [_u(q, _BRYAN_X) for q in qubits]  # merged into the final 1q layer by the compiler
+
+
+def generate_candidates(N, n, cal, *, dd=True, deadline=None, max_trees=40, max_paths=10, max_ladders=12):
+    """Yield exact candidates (circuit, qubit_list, kind) for |D^(N)_n> on the calibrated device."""
+    deadline = deadline if deadline is not None else time.monotonic() + 30.0  # default budget
+    k = min(n, N - n)  # prepare the lighter of the two complementary states
+    flip = n > N - n  # append X everywhere afterwards if we prepared the complement
+    p_exc = n / N  # excitation probability of each Dicke qubit (for readout pricing)
+    if k == 0:  # computational basis state: no entanglement needed
+        qs = sorted(cal.sq, key=lambda q: ((cal.e1[q] if flip else cal.e0[q]) + cal.sq[q], str(q)))[:N]  # best readout
+        gate = cirq.PhasedXZGate(x_exponent=1 if flip else 0, z_exponent=0, axis_phase_exponent=0)  # X or identity
+        yield cirq.Circuit(cirq.Moment(gate.on(q) for q in qs)), qs, 'trivial'  # explicit gate keeps qubits visible
+        return  # only candidate
+    if k == 1:  # W-state trees
+        seen = set()  # avoid compiling duplicate trees
+        proxies = []  # (proxy cost, root name, root, parent map)
+        for w in (0.0, 0.01, 0.03):  # depth penalties: from pure quality to compact trees
+            for r in sorted(cal.sq, key=str):  # every root
+                parent = grow_tree(cal, r, N, p_exc, w)  # greedy tree
+                if parent is None:  # component too small
+                    continue  # skip
+                key = (r, frozenset(parent.items()))  # identity of the tree
+                if key in seen:  # duplicate
+                    continue  # skip
+                seen.add(key)  # remember it
+                cost = (sum(2 * cal.edge_cost(v, u) for v, u in parent.items())
+                        + sum(cal.ro_cost(q, p_exc) for q in [r, *parent]))  # cheap proxy: CZs + readout
+                proxies.append((cost, str(r), r, parent))  # keep
+        proxies.sort(key=lambda t: (t[0], t[1]))  # best proxies first
+        for _, _, r, parent in proxies[:max_trees]:  # compile the most promising trees
+            qs = [r, *parent]  # its qubits
+            ops = w_tree_ops(r, _tree_children(parent)) + (_x_all(qs) if flip else [])  # exact construction
+            yield compile_layers(ops, dd=dd), qs, 'tree'  # candidate
+            if time.monotonic() > deadline:  # out of time
+                return  # stop
+        return  # trees beat paths for k = 1 (same CZ count, logarithmic instead of linear depth)
+    edge_w, node_w = path_profile(N, k)  # per-position weights of the BE path
+    for _, path in beam_paths(cal, N, edge_w, node_w, p_exc)[:max_paths]:  # best paths
+        ops = dicke_path_ops(list(path), k) + (_x_all(path) if flip else [])  # exact construction
+        yield compile_layers(ops, dd=dd), list(path), 'path'  # candidate
+        if time.monotonic() > deadline:  # out of time
+            return  # stop
+    a, b = N // 2, N - N // 2  # balanced arms (b >= a >= k because k <= N/2)
+    ew, nw = path_profile(b, k)  # typical arm weights
+    w_edge = sum(ew) / max(len(ew), 1)  # average CZs per arm edge
+    w_node = sum(nw) / max(len(nw), 1)  # average 1q gates per arm qubit
+    for _, left0, right0 in ladder_candidates(cal, k, p_exc, w_edge, w_node)[:max_ladders]:  # best ladders
+        used = set(left0) | set(right0)  # ladder qubits
+        for _, right in extend_path(cal, right0, b, used, p_exc, w_edge, w_node)[:2]:  # right-arm options
+            for _, left in extend_path(cal, left0, a, used | set(right), p_exc, w_edge, w_node)[:1]:  # best left arm
+                qs = list(left) + list(right)  # all qubits
+                ops = split_ops(list(left), list(right), k) + (_x_all(qs) if flip else [])  # exact construction
+                yield compile_layers(ops, dd=dd), qs, 'split'  # candidate
+        if time.monotonic() > deadline:  # out of time
+            return  # stop
+
+
+def _bryan_create_dicke_state(
+    num_qubits: int,
+    num_excitations: int,
+    cz_pauli_error_rate: dict[
+        tuple[cirq.GridQubit, cirq.GridQubit], tuple[float, float]
+    ],
+    sq_pauli_error_rate: dict[cirq.GridQubit, tuple[float, float]],
+    zero_errors: dict[cirq.GridQubit, tuple[float, float]],
+    one_errors: dict[cirq.GridQubit, tuple[float, float]],
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """Create a Cirq circuit that produces a Dicke state.
+
+    Args:
+        num_qubits: The number, N, of qubits in the Dicke state.
+        num_excitations: The number, n, of 1s in the state.
+        cz_pauli_error_rate: Measured CZ Pauli error rates and their statistical uncertainties.
+        sq_pauli_error_rate: Measured single-qubit Pauli error rates and their statistical uncertainties.
+        zero_errors: Measured parallel 0 -> 1 readout error rates and their statistical uncertainties.
+        one_errors: Measured 1 -> 0 readout error rates and their statistical uncertainties.
+
+    Returns:
+        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
+
+    Raises:
+        NotImplementedError: The requested (N, n) combination is not implemented.
+    """
+    start = time.monotonic()  # the challenge counts > 60 s as NotImplementedError
+    N, n = int(num_qubits), int(num_excitations)  # accept numpy integers too
+    if N < 1 or n < 0 or n > N:  # no such Dicke state
+        raise NotImplementedError(f'invalid (N, n) = ({N}, {n})')  # explicit refusal
+    cal = Calibration(cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors)  # pessimistic model
+    if N > len(cal.sq):  # not enough working qubits
+        raise NotImplementedError('not enough usable qubits')  # cannot embed
+    best = None  # (predicted log-fidelity, circuit, qubits)
+    for circ, qs, _ in generate_candidates(N, n, cal, deadline=start + 30.0):  # exact candidates
+        if len(circ) > 1750:  # would not be run on the hardware
+            continue  # discard
+        score = estimate_log_fidelity(circ, cal, qs, n / N)  # predicted log success probability
+        if best is None or score > best[0]:  # keep the best
+            best = (score, circ, qs)  # new incumbent
+    if best is None:  # nothing embeddable / everything too deep
+        raise NotImplementedError('no embedding within the 1750-moment limit')  # explicit refusal
+    return best[1], set(best[2])  # circuit and the qubits that hold the state
+
+
+def _ideal_calibration():
+    """Uniform 'calibration' covering every Willow105 qubit and coupler (the bonus is noise-free)."""
+    device = cirq_google.Willow105  # the target device
+    qubits = sorted(device.metadata.qubit_set)  # all 105 qubits
+    cz = {tuple(sorted(p)): (1e-3, 0.0) for p in device.metadata.qubit_pairs}  # every coupler, equal cost
+    flat = {q: (1e-3, 0.0) for q in qubits}  # equal single-qubit and readout costs
+    return Calibration(cz, flat, flat, flat, beta=0.0)  # deterministic, uniform model
+
+
+def broadcast_tree(cal, root, N):
+    """Greedy round-by-round matching tree: every informed node recruits at most one new neighbour per round."""
+    informed = [root]  # informed nodes in order of recruitment
+    parent = {}  # child -> parent
+    center = (np.mean([q.row for q in cal.sq]), np.mean([q.col for q in cal.sq]))  # prefer central growth
+    while len(informed) < N:  # until N qubits hold the excitation
+        taken = set()  # qubits recruited this round
+        new = []  # (child, parent) pairs of this round
+        for u in list(informed):  # each informed node may recruit once
+            options = [v for v in cal.adj[u] if v not in parent and v != root and v not in taken]  # free neighbours
+            if not options or len(informed) + len(new) >= N:  # nothing to do / enough nodes
+                continue  # next node
+            v = min(options, key=lambda q: (len([w for w in cal.adj[q] if w not in parent and w != root]) == 0,
+                                            (q.row - center[0]) ** 2 + (q.col - center[1]) ** 2, str(q)))  # central, non-dead-end
+            taken.add(v)  # reserve it
+            new.append((v, u))  # recruit
+        if not new:  # stuck (cannot happen on a connected device with N <= 105)
+            return None  # give up on this root
+        for v, u in new:  # commit the round
+            parent[v] = u  # tree edge
+            informed.append(v)  # v can recruit from the next round on
+    return parent  # {child: parent}
+
+
+def pack_earliest(circuit):
+    """Re-insert every operation at the earliest moment allowed by its qubits (mixed 1q/CZ moments)."""
+    return cirq.Circuit(circuit.all_operations(), strategy=cirq.InsertStrategy.EARLIEST)  # cirq does the packing
+
+
+def _bryan_create_dicke_state_adaptive(
+    num_qubits: int, num_excitations: int
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """Create a Cirq circuit that produces a Dicke state, allowing for adaptive circuits.
+
+    Args:
+        num_qubits: The number, N, of qubits in the Dicke state.
+        num_excitations: The number, n, of 1s in the state.
+
+    Returns:
+        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
+
+    Raises:
+        NotImplementedError: The requested (N, n) combination is not implemented.
+    """
+    N, n = int(num_qubits), int(num_excitations)  # accept numpy integers
+    if N < 1 or n < 0 or n > N or N > 105:  # impossible request
+        raise NotImplementedError(f'invalid (N, n) = ({N}, {n})')  # explicit refusal
+    cal = _ideal_calibration()  # all qubits, uniform costs
+    k = min(n, N - n)  # complement trick, as in the hardware solution
+    flip = n > N - n  # whether to flip everything at the end
+    cands = []  # (circuit, qubits)
+    if k == 1:  # W states: broadcast trees from every root
+        for r in sorted(cal.sq, key=str):  # every possible root
+            parent = broadcast_tree(cal, r, N)  # shallow tree
+            if parent is None:  # failed
+                continue  # skip
+            qs = [r, *parent]  # its qubits
+            ops = w_tree_ops(r, _tree_children(parent)) + (_x_all(qs) if flip else [])  # exact construction
+            cands.append((compile_layers(ops, dd=False), qs))  # no DD in a noise-free setting
+    else:  # k = 0 or k >= 2: reuse the hardware candidate generator on the ideal device
+        for circ, qs, _ in generate_candidates(N, n, cal, dd=False, max_trees=5, max_paths=2, max_ladders=3):  # few suffice
+            cands.append((circ, qs))  # keep
+    if not cands:  # nothing found
+        raise NotImplementedError('no embedding found')  # explicit refusal
+    best = None  # (depth, circuit, qubits)
+    for circ, qs in cands:  # pick the shallowest, trying both layouts
+        for c in (circ, pack_earliest(circ)):  # layered and packed versions
+            if best is None or len(c) < best[0]:  # strictly shallower
+                best = (len(c), c, qs)  # new incumbent
+    return best[1], set(best[2])  # circuit and data qubits
