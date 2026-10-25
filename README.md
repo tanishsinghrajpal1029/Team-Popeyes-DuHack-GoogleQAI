@@ -1,5 +1,11 @@
 # Dicke states on Google Willow — Team Popeyes (DuQuantum × Google Quantum AI)
 
+## Combined notebook and UNO Q exhibit
+
+`DuQuantum_submission_BEST_OF_BOTH.ipynb` contains the self-contained combined submission. Its main circuit passed 228/228 local rule checks, and its bonus circuit passed exact-state checks for all 56 graded pairs. The bonus depth comparison total is 44.27 under the notebook's `Σ Nn/depth` metric; this is not a measured Willow score. `arduino-uno-q-willow/` is the companion LED-matrix exhibit, with setup and USB deployment instructions in its own README.
+
+The material below documents the repository's earlier `main.py` construction and experiments.
+
 `main.py` implements `create_dicke_state(N, n, cz_pauli_error_rate, sq_pauli_error_rate,
 zero_errors, one_errors)`, returning an exact circuit (CZ + PhasedXZ only, on calibrated
 qubits and couplers) that prepares |D^N_n⟩ on Willow 105, and the set of qubits it lives on.
