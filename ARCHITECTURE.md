@@ -278,7 +278,8 @@ now builds every exact candidate below, checks nothing else, and returns the sha
   U_{m0}: |0^{m0−r}1^r⟩ → |D^{m0}_r⟩, r ≤ min(k, m0), an isometry we synthesize exactly with
   `scs_synth.BatchCircuit` (fewest layers first): U₃ r≤3 17 moments (sweep 19), U₄ r≤3 23 (35),
   U₄ r≤4 29 (41), U₅ r≤3 31 (49), U₅ r≤4 43 (69), U₆ r≤2 27, U₆ r≤3 39 (63), U₆ r≤4 43 (81),
-  U₄ r≤2 19, U₅ r≤2 23, U₆ r≤2 27, U₇ r≤2 27, U₇ r≤3 43 (77), U₈ r≤2 31; U₅ r≤5 and U₆ r≤5 were not found exact within 25 min on 13 seeds. The layer count found varies
+  U₄ r≤2 19, U₅ r≤2 23, U₆ r≤2 27, U₇ r≤2 27, U₇ r≤3 43 (77), U₇ r≤4 59 (one seed of 20, 69 min), U₈ r≤2 31; U₅ r≤5, U₆ r≤5 and U₈ r≤3 were not found exact within 25–60 min on 10–13 seeds each (best 1e-3 to 1e-2); a 2×4 ladder shape
+  for the 6–8 qubit blocks was worse than the path (U₆ r≤4 not exact at 30 layers vs 21). The layer count found varies
   2–6 between seeds (U₄ r≤4: 14–21 layers over 12 seeds), so every block got 8–13 seeds.
   Effect: D⁹₃ 54 → 36, D¹¹₄ 88 → 51, D¹²₄ 88 → 51, D¹³₂/D¹⁴₂ 40 → 31, D¹⁵₂ 46 → 36,
   D¹³₃/D¹⁴₃ 82 → 48/49, D¹⁴₄ 106 → 78, D¹⁵₃ 96 → 62, D¹⁵₄ 124 → 92, D¹⁵₇ 160 → 144. The thermometer order never changed a winner (bottom-up always won); putting
