@@ -1,3 +1,5 @@
+**N.B. THE FINAL SUBMISSION IS CALLED SUBMISSION.IPYNB, NOT THE STANDARD NOTEBOOK
+
 # Preparing Dicke states on Google's Willow chip
 
 Team Popeyes · DuQuantum × Google Quantum AI Challenge. **The entry is [`submission.ipynb`](submission.ipynb)**: the challenge notebook with [`main.py`](main.py) embedded verbatim (regenerate it with `experiments/make_notebook.py --run`).
