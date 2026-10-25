@@ -9,7 +9,7 @@ Writes experiments/results/harden.csv and prints every failure plus the worst bu
 and moment count.
 
   python experiments/harden.py --workers 6
-  python experiments/harden.py --workers 6 --sub tanish_submission.py --out harden_tanish.csv
+  python experiments/harden.py --workers 6 --sub path/to/other.py --out harden_other.csv
 """
 
 import argparse

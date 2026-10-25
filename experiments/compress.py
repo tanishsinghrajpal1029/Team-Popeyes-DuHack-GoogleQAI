@@ -1,4 +1,5 @@
-"""Warm-start compression of Bryan's exact Dicke circuits (HANDOFF P3).
+"""Warm-start compression of Bryan's exact Dicke circuits. NEGATIVE RESULT: greedy CZ
+deletion from D9,3 never recovered exactness (0 of 8 tries); see ARCHITECTURE.md, section 6.
 
 synth.py finds circuits from random starts, which stops scaling around N = 9. Here we start
 from a circuit that is already exact (the vendored split Baertschi-Eidenbenz construction,

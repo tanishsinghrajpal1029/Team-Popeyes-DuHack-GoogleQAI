@@ -5,7 +5,7 @@ CZ moment is free. This scores each submission's circuits as built and after
 cirq.stratified_circuit separates CZ from single-qubit gates (exact same gates and
 qubits). Rows go to experiments/results/<out> with labels <sub> and <sub>+stratified.
 
-  python experiments/mixed_moments.py --sub tanish=tanish_submission.py --cases 10,5 9,4 --out mixed.csv
+  python experiments/mixed_moments.py --sub other=path/to/other.py --cases 10,5 9,4 --out mixed.csv
 """
 
 import argparse

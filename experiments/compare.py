@@ -5,7 +5,10 @@ is scored with evaluate.evaluate_case (exact density matrix, idle noise by defau
 parallel, and one row per case goes to experiments/results/<out>.
 
   OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python experiments/compare.py \
-      --sub richard=main.py --sub tanish=tanish_submission.py --out vs_tanish.csv --workers 8
+      --sub latest=main.py --sub other=path/to/other_submission.py --out vs_other.csv --workers 8
+
+The teammates' combined submission used for vs_tanish*.csv and prelim_vs_latest.csv is
+tanish_submission.py at commit 1995558 (`git show 1995558:tanish_submission.py > other.py`).
 """
 
 import argparse
