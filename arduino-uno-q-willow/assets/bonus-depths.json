@@ -1,0 +1,397 @@
+{
+  "note": "Exact ideal-state circuits on the static Willow topology; depths are moments. Candidate labels do not imply hardware ranking.",
+  "cases": [
+    {
+      "N": 2,
+      "n": 1,
+      "candidate_a": 3,
+      "candidate_b": 3,
+      "selected": 3
+    },
+    {
+      "N": 3,
+      "n": 1,
+      "candidate_a": 6,
+      "candidate_b": 6,
+      "selected": 6
+    },
+    {
+      "N": 4,
+      "n": 1,
+      "candidate_a": 7,
+      "candidate_b": 7,
+      "selected": 7
+    },
+    {
+      "N": 4,
+      "n": 2,
+      "candidate_a": 7,
+      "candidate_b": 7,
+      "selected": 7
+    },
+    {
+      "N": 5,
+      "n": 1,
+      "candidate_a": 9,
+      "candidate_b": 9,
+      "selected": 9
+    },
+    {
+      "N": 5,
+      "n": 2,
+      "candidate_a": 15,
+      "candidate_b": 13,
+      "selected": 13
+    },
+    {
+      "N": 6,
+      "n": 1,
+      "candidate_a": 10,
+      "candidate_b": 10,
+      "selected": 10
+    },
+    {
+      "N": 6,
+      "n": 2,
+      "candidate_a": 16,
+      "candidate_b": 16,
+      "selected": 16
+    },
+    {
+      "N": 6,
+      "n": 3,
+      "candidate_a": 15,
+      "candidate_b": 15,
+      "selected": 15
+    },
+    {
+      "N": 7,
+      "n": 1,
+      "candidate_a": 10,
+      "candidate_b": 10,
+      "selected": 10
+    },
+    {
+      "N": 7,
+      "n": 2,
+      "candidate_a": 19,
+      "candidate_b": 21,
+      "selected": 19
+    },
+    {
+      "N": 7,
+      "n": 3,
+      "candidate_a": 21,
+      "candidate_b": 21,
+      "selected": 21
+    },
+    {
+      "N": 8,
+      "n": 1,
+      "candidate_a": 11,
+      "candidate_b": 11,
+      "selected": 11
+    },
+    {
+      "N": 8,
+      "n": 2,
+      "candidate_a": 22,
+      "candidate_b": 22,
+      "selected": 22
+    },
+    {
+      "N": 8,
+      "n": 3,
+      "candidate_a": 27,
+      "candidate_b": 29,
+      "selected": 27
+    },
+    {
+      "N": 8,
+      "n": 4,
+      "candidate_a": 24,
+      "candidate_b": 24,
+      "selected": 24
+    },
+    {
+      "N": 9,
+      "n": 1,
+      "candidate_a": 12,
+      "candidate_b": 12,
+      "selected": 12
+    },
+    {
+      "N": 9,
+      "n": 2,
+      "candidate_a": 23,
+      "candidate_b": 25,
+      "selected": 23
+    },
+    {
+      "N": 9,
+      "n": 3,
+      "candidate_a": 31,
+      "candidate_b": 36,
+      "selected": 31
+    },
+    {
+      "N": 9,
+      "n": 4,
+      "candidate_a": 41,
+      "candidate_b": 50,
+      "selected": 41
+    },
+    {
+      "N": 10,
+      "n": 1,
+      "candidate_a": 13,
+      "candidate_b": 13,
+      "selected": 13
+    },
+    {
+      "N": 10,
+      "n": 2,
+      "candidate_a": 28,
+      "candidate_b": 27,
+      "selected": 27
+    },
+    {
+      "N": 10,
+      "n": 3,
+      "candidate_a": 46,
+      "candidate_b": 37,
+      "selected": 37
+    },
+    {
+      "N": 10,
+      "n": 4,
+      "candidate_a": 64,
+      "candidate_b": 51,
+      "selected": 51
+    },
+    {
+      "N": 10,
+      "n": 5,
+      "candidate_a": 73,
+      "candidate_b": 73,
+      "selected": 73
+    },
+    {
+      "N": 11,
+      "n": 1,
+      "candidate_a": 13,
+      "candidate_b": 13,
+      "selected": 13
+    },
+    {
+      "N": 11,
+      "n": 2,
+      "candidate_a": 34,
+      "candidate_b": 31,
+      "selected": 31
+    },
+    {
+      "N": 11,
+      "n": 3,
+      "candidate_a": 50,
+      "candidate_b": 45,
+      "selected": 45
+    },
+    {
+      "N": 11,
+      "n": 4,
+      "candidate_a": 74,
+      "candidate_b": 51,
+      "selected": 51
+    },
+    {
+      "N": 11,
+      "n": 5,
+      "candidate_a": 88,
+      "candidate_b": 88,
+      "selected": 88
+    },
+    {
+      "N": 12,
+      "n": 1,
+      "candidate_a": 13,
+      "candidate_b": 13,
+      "selected": 13
+    },
+    {
+      "N": 12,
+      "n": 2,
+      "candidate_a": 33,
+      "candidate_b": 31,
+      "selected": 31
+    },
+    {
+      "N": 12,
+      "n": 3,
+      "candidate_a": 52,
+      "candidate_b": 45,
+      "selected": 45
+    },
+    {
+      "N": 12,
+      "n": 4,
+      "candidate_a": 78,
+      "candidate_b": 51,
+      "selected": 51
+    },
+    {
+      "N": 12,
+      "n": 5,
+      "candidate_a": 94,
+      "candidate_b": 94,
+      "selected": 94
+    },
+    {
+      "N": 12,
+      "n": 6,
+      "candidate_a": 102,
+      "candidate_b": 103,
+      "selected": 102
+    },
+    {
+      "N": 13,
+      "n": 1,
+      "candidate_a": 14,
+      "candidate_b": 14,
+      "selected": 14
+    },
+    {
+      "N": 13,
+      "n": 2,
+      "candidate_a": 40,
+      "candidate_b": 31,
+      "selected": 31
+    },
+    {
+      "N": 13,
+      "n": 3,
+      "candidate_a": 60,
+      "candidate_b": 48,
+      "selected": 48
+    },
+    {
+      "N": 13,
+      "n": 4,
+      "candidate_a": 78,
+      "candidate_b": 62,
+      "selected": 62
+    },
+    {
+      "N": 13,
+      "n": 5,
+      "candidate_a": 106,
+      "candidate_b": 106,
+      "selected": 106
+    },
+    {
+      "N": 13,
+      "n": 6,
+      "candidate_a": 116,
+      "candidate_b": 116,
+      "selected": 116
+    },
+    {
+      "N": 14,
+      "n": 1,
+      "candidate_a": 14,
+      "candidate_b": 14,
+      "selected": 14
+    },
+    {
+      "N": 14,
+      "n": 2,
+      "candidate_a": 40,
+      "candidate_b": 31,
+      "selected": 31
+    },
+    {
+      "N": 14,
+      "n": 3,
+      "candidate_a": 62,
+      "candidate_b": 49,
+      "selected": 49
+    },
+    {
+      "N": 14,
+      "n": 4,
+      "candidate_a": 78,
+      "candidate_b": 63,
+      "selected": 63
+    },
+    {
+      "N": 14,
+      "n": 5,
+      "candidate_a": 112,
+      "candidate_b": 112,
+      "selected": 112
+    },
+    {
+      "N": 14,
+      "n": 6,
+      "candidate_a": 124,
+      "candidate_b": 124,
+      "selected": 124
+    },
+    {
+      "N": 14,
+      "n": 7,
+      "candidate_a": 133,
+      "candidate_b": 133,
+      "selected": 133
+    },
+    {
+      "N": 15,
+      "n": 1,
+      "candidate_a": 14,
+      "candidate_b": 14,
+      "selected": 14
+    },
+    {
+      "N": 15,
+      "n": 2,
+      "candidate_a": 46,
+      "candidate_b": 35,
+      "selected": 35
+    },
+    {
+      "N": 15,
+      "n": 3,
+      "candidate_a": 74,
+      "candidate_b": 62,
+      "selected": 62
+    },
+    {
+      "N": 15,
+      "n": 4,
+      "candidate_a": 92,
+      "candidate_b": 84,
+      "selected": 84
+    },
+    {
+      "N": 15,
+      "n": 5,
+      "candidate_a": 124,
+      "candidate_b": 124,
+      "selected": 124
+    },
+    {
+      "N": 15,
+      "n": 6,
+      "candidate_a": 134,
+      "candidate_b": 134,
+      "selected": 134
+    },
+    {
+      "N": 15,
+      "n": 7,
+      "candidate_a": 144,
+      "candidate_b": 144,
+      "selected": 144
+    }
+  ]
+}

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Willow Route Lab · UNO Q</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">✦</span><div><strong>WILLOW ROUTE LAB</strong><small>ON ARDUINO UNO Q</small></div></div>
+      <div id="connection" class="status">Connecting to board…</div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">A pocket-sized quantum routing exhibit</p>
+        <h1>When the shortest route <em>isn’t</em> the best route.</h1>
+        <p>Pick a route, weaken a connection, and watch the UNO Q’s built-in LED matrix compare a direct route with an error-aware one.</p>
+        <div class="legend"><span><i class="dot cyan"></i> Fewest hops</span><span><i class="dot lime"></i> Error-aware</span><span><i class="dot coral"></i> Weak qubit</span></div>
+      </div>
+      <div class="board-card">
+        <div class="card-heading"><div><span class="eyebrow">On the actual board</span><h2>8 × 13 LED matrix</h2></div><span class="live-pill">LIVE WINDOW</span></div>
+        <div id="matrix" class="matrix" aria-label="UNO Q matrix preview"></div>
+        <div class="matrix-footer"><span id="matrix-mode">Fewest hops</span><span>Blue/green status LED switches with route</span></div>
+        <p class="fine">The UNO Q has 104 matrix pixels. This is a central window of Willow’s 105-qubit topology, not a one-pixel-per-qubit full-chip display.</p>
+      </div>
+    </section>
+
+    <section class="workbench">
+      <aside class="controls panel">
+        <p class="eyebrow">01 · Choose the challenge</p>
+        <h2>Make a route decision</h2>
+        <div class="scenario-list" id="scenarios">
+          <button type="button" data-scenario="crossbar" class="selected"><b>Across the chip</b><small>(6,2) → (6,12)</small></button>
+          <button type="button" data-scenario="upper"><b>Upper corridor</b><small>(5,2) → (5,11)</small></button>
+          <button type="button" data-scenario="diagonal"><b>Diagonal crossing</b><small>(4,3) → (8,11)</small></button>
+        </div>
+        <label class="slider-label" for="weak-error"><span>Weak-link CZ error</span><strong id="weak-value">12.0%</strong></label>
+        <input id="weak-error" type="range" min="0.2" max="20" step="0.1" value="12">
+        <div class="range-labels"><span>0.2%</span><span>20%</span></div>
+        <label class="switch-row"><input id="block-weak" type="checkbox"><span>Remove weak qubit entirely</span></label>
+        <div id="message" class="message" role="status">Choose a scenario to explore the route.</div>
+      </aside>
+
+      <div class="visual panel">
+        <div class="visual-heading"><div><p class="eyebrow">02 · See the choice</p><h2>Willow topology</h2></div><div class="chip-count">105 qubits · 182 couplers</div></div>
+        <div class="map-wrap"><svg id="topology" role="img" aria-label="Willow topology and two routes" viewBox="0 0 760 690"></svg></div>
+        <p class="fine">The grid and couplers are the supplied Willow layout. Error values here are synthetic teaching values, not live calibration or a prediction of hardware fidelity.</p>
+      </div>
+    </section>
+
+    <section class="outcomes">
+      <div class="outcomes-heading"><p class="eyebrow">03 · Compare the tradeoff</p><h2>Two answers to the same problem</h2></div>
+      <div class="outcome-grid">
+        <article class="result cyan-card"><div class="result-top"><span class="badge cyan-bg">A</span><h3>Fewest hops</h3></div><div class="big-number" id="direct-survival">—</div><p>estimated operation survival</p><div class="metrics"><span><b id="direct-hops">—</b> hops</span><span><b id="direct-swaps">—</b> SWAPs</span></div></article>
+        <article class="result lime-card"><div class="result-top"><span class="badge lime-bg">B</span><h3>Error-aware</h3></div><div class="big-number" id="aware-survival">—</div><p>estimated operation survival</p><div class="metrics"><span><b id="aware-hops">—</b> hops</span><span><b id="aware-swaps">—</b> SWAPs</span></div></article>
+        <article class="result insight"><span class="eyebrow">WHY IT MATTERS</span><div class="gain" id="gain">—</div><p id="insight-copy">A few extra SWAPs can beat one very unreliable coupler.</p></article>
+      </div>
+      <p class="model-note">Teaching model: each move before the final interaction approximates one SWAP = three CZ gates. Estimated survival multiplies (1 − error) across those gates. It omits decoherence, crosstalk, readout error, parallel schedules, and calibrated compilation.</p>
+    </section>
+    <section class="circuit-lab panel" aria-labelledby="circuit-title">
+      <div class="circuit-intro">
+        <div><p class="eyebrow">04 · The combined Dicke solution</p><h2 id="circuit-title">Two exact circuits. One shallower answer.</h2><p>The main-task notebook uses its tested portfolio by default and an alternate construction for D⁷₃ and D⁹₄. For the bonus, it builds both and chooses fewer moments.</p></div>
+        <div class="circuit-proof"><strong>228/228</strong><span>main pairs passed local rule checks</span><strong>56/56</strong><span>bonus pairs passed exact-state checks</span></div>
+      </div>
+      <div class="circuit-workbench">
+        <div class="circuit-controls">
+          <label class="slider-label" for="bonus-n">Bonus qubits N <strong id="bonus-n-value">9</strong></label>
+          <input id="bonus-n" type="range" min="2" max="15" value="9">
+          <label class="slider-label" for="bonus-k">Excitations n <strong id="bonus-k-value">4</strong></label>
+          <input id="bonus-k" type="range" min="1" max="4" value="4">
+          <button id="show-bonus" class="action-button" type="button">Show depth duel on matrix ↗</button>
+          <button id="show-route" class="text-button" type="button">Return matrix to routing</button>
+        </div>
+        <div class="circuit-result">
+          <span class="eyebrow" id="circuit-state">D⁹₄</span>
+          <h3 id="main-choice">Main task · measured crossover</h3>
+          <div class="depth-row"><span>Candidate A</span><div><i id="bonus-a-bar"></i></div><strong id="bonus-a-depth">—</strong></div>
+          <div class="depth-row"><span>Candidate B</span><div><i id="bonus-b-bar"></i></div><strong id="bonus-b-depth">—</strong></div>
+          <p class="selected-depth">Bonus selects <strong id="bonus-selected">—</strong> moments</p>
+          <p id="bonus-message" class="fine" role="status">Select a pair to display its checked depths.</p>
+        </div>
+      </div>
+      <p class="model-note">On the physical matrix, upper bars show A and lower bars show B; the shorter bar glows brighter. The status LED is blue for A, green for B, and white for a tie. These are precomputed ideal-circuit depths; the UNO Q visualizes the decision and does not run Willow or Cirq.</p>
+    </section>
+    <footer>Built for a hands-on explanation of routing and Dicke circuit choices on Google’s Willow topology · Duke Quantum Hackathon project</footer>
+  </main>
+  <script src="libs/socket.io.min.js"></script>
+  <script src="libs/arduino.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

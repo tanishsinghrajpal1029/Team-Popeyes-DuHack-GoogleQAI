@@ -48,13 +48,38 @@ def test_heavy_dropout_still_works():
         )
 
 
-@pytest.mark.parametrize("N,n", [(N, n) for N in range(2, 11) for n in range(1, N // 2 + 1)])
+def _bonus_baseline() -> dict:
+    """Moments per bonus case from the last notebook benchmark (experiments/bench_notebook.py)."""
+    import csv
+
+    path = os.path.join(ROOT, "experiments", "results", "notebook_bonus.csv")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as fh:
+        return {(int(r["N"]), int(r["n"])): int(r["moments"]) for r in csv.DictReader(fh)}
+
+
+BONUS_BASELINE = _bonus_baseline()
+
+
+@pytest.mark.parametrize("N,n", [(N, n) for N in range(2, 16) for n in range(1, N // 2 + 1)])
 def test_bonus_entry_exact_and_routed(N, n):
-    from main import create_dicke_state_adaptive
+    """All 56 scored bonus cases: exact, routed, only allowed gates, built in time, no deeper
+    than the committed benchmark (the bonus scores N*n / moments)."""
+    from main import _uniform_calibration, create_dicke_state_adaptive
     from validity import noiseless_fidelity
     import cirq_google
 
+    t0 = time.time()
     circuit, qubits = create_dicke_state_adaptive(N, n)
+    assert time.time() - t0 < 60
     cirq_google.Willow105.validate_circuit(circuit)
     assert len(qubits) == N
+    cal = _uniform_calibration()
+    problems = check_rules(
+        circuit, qubits, N, n, cal["cz_pauli_error_rate"], cal["sq_pauli_error_rate"], fidelity_atol=None
+    )
+    assert not problems, problems
     assert abs(noiseless_fidelity(circuit, qubits, n) - 1) < 1e-9
+    if (N, n) in BONUS_BASELINE:
+        assert len(circuit) <= BONUS_BASELINE[(N, n)], f"{len(circuit)} moments, benchmark had {BONUS_BASELINE[(N, n)]}"

@@ -436,7 +436,133 @@ the bonus text (the notebook never defines one), gave 37.1542 over 56 cases. All
 routed, with no measurements, and the slowest build took 7.7 s. Results are in
 `notebook_standard.csv`, `notebook_standard_totals.csv` and `notebook_bonus.csv`.)
 
-### Prompt 44 (model: Claude Opus 5.5)
+## Session 5 — Sat Oct 24, 2026, ~10:10 PM EDT (Sun 02:10 UTC)
+
+### Prompt 44 (plan mode; model: Claude Fable 5.1)
+
+> /plan Your solution is tied for 3rd place out of the five submissions I have received so far.
+> For the bonus question, your score is 37.1542. The highest score for the bonus question among
+> the solutions I have received is 41.1036.
+
+(The organizer's message, pasted as the planning brief. The assistant reproduced 37.1542 from
+`notebook_bonus.csv`, then measured, read-only: `Willow105.validate_circuit` rejects classically
+controlled gates (measurement alone passes); Givens-only, 2D-patch and complex-layer brickwork
+synthesis all stall at N ≈ 8; the deployed split circuits are 2·(CZ depth)+1 moments with a
+strictly serial 41-moment arm tail; depth-minimal replacements for that tail save 8–10 moments.
+It asked how to spend the time given a realistic +1 to +1.5 points.)
+
+### Prompt 45 (mid-plan question)
+
+> is the gap just an accuracy gap on the n <= 8 cases or is it one where we are missing actual
+> cases where 8 <= n <= 15
+
+(Answer: no missing cases; all 56 are present and exact. 12.1 points come from N ≤ 8, 25.0 from
+N ≥ 9; the W states are at the Givens-tree floor, so the leader's edge is in k ≥ 2 depth.)
+
+Clarifying question from the assistant, and Richard's answer:
+
+- *Time-boxed micro-wins (~2.5 h, then deliverables) / deliverables only / all-in on the bonus?*
+  → "Time-boxed micro-wins (Recommended)". Plan approved.
+
+### Prompt 46 (during execution)
+
+> did we also incorporate tanish branch optimal stuff
+
+(The assistant ran the preliminary combined submission (commit 1995558) and the `origin/Aanha`
+branch on all 56 bonus cases: 33.7 and 32.4 in total, but shallower than ours on W₅–W₁₅ by 1–2
+moments and on D¹⁰₅/D¹²₆/D¹⁴₇ by 3–5. It ported Aanha's broadcast W tree into the bonus
+candidate set with attribution; the half-filling cases were already beaten by the new split
+variants. Outcome of the session: `score_solution` 37.15 → 40.59, all cases exact, routed and
+whitelisted, hardware path unchanged (golden test passes). Details: ARCHITECTURE.md section 5.)
+
+### Prompt 47 (new session after a restart)
+
+> can u push the current and continue
+
+(The assistant exported the finished tail blocks (U₄ r≤4 29 moments, U₆ r≤4 43), re-ran the
+bonus benchmark (40.59, then 42.72 once whole-arm blocks were allowed), regenerated and executed `submission.ipynb`, re-benchmarked it with the
+notebook's `score_solution`, updated ARCHITECTURE.md, and committed and pushed branch `richard`.)
+
+### Prompt 48
+
+> You are an autonomous agent operating for the next approximately 4 hours of walltime until
+> 5:30AM ET. Do not terminate, keep subagents/monitoring open and available, and keep building
+> and optimizing for the end goal of increasing accuracy and reliability for our challenges.
+> Ensure you keep the codebase clean and push majors changes to the richard branch. You are the
+> world's strongest frontier model and you are completely able to optimize the score. Go.
+
+### Prompt 49
+
+> focus on the small N test cases since those appear to have higher weighting in our final score
+> calcs. you can run tests in parallel and you dont have to wait on independent tasks to finish,
+> since the largest constraint is time. however if all cores are being used, it is acceptable.
+> new ETA is 4:30AM ET
+
+### Prompt 50
+
+> you are still autonomous do not end
+
+(Work under prompts 48–50, Sun 04:45–07:45 UTC: whole-arm synthesized blocks (m0 = arm length)
+lifted the bonus to 42.72, then U₇ r≤3, U₄/U₅ r≤2 and U₇ r≤4 blocks and a many-seed re-synthesis
+of every N ≤ 8 case took it to **43.79** (notebook `score_solution`, all 56 cases exact, routed,
+whitelisted; commits a63b328 … 70220fe on `richard`). The fewest-CZ small-N circuits from the
+same runs were evaluated for the hardware track on three calibrations and not deployed (none
+measured better; ARCHITECTURE.md section 6). Searches that did not land: U₅ r≤5, U₆ r≤5,
+U₈ r≤3, ladder-shaped blocks, randomized W-tree matchings. A seed collision overwrote two
+synthesis result files; they were restored from git.)
+
+### Prompt 51 (Sun Oct 25, ~06:40 ET)
+
+> (Pasted organizer email, 04:01 ET: scoring was numerically unstable, now averages 1/score and
+> reports 1/avg(1/score); (N, n) pairs and max_correlator_size changed; new tables: overall
+> ranking, per-pair breakdown for (10,3), (10,5), (15,4), Problem-1-only ranking.)
+
+(Work: derived what the revised aggregate changes (1/E[z + x]: f and x decide, imbalance only via
+λ/K); compared our deployed circuits with the preliminary combined submission per gate-error
+budget, which showed 60% of our single-qubit gates at N ≥ 9 were the vendored CPMG pulses; added
+the exact `_merge_single_qubit_runs` pass before our sparse XY4 DD; measured it against the
+deployed circuits and the teammates' builder on 3 calibrations under gate and idle noise
+(density matrices to N = 10, trajectories for D¹⁵₄); regenerated the golden file for the 13
+small-N cases whose single-qubit gates merged (all measured equal or better).)
+
+### Prompt 52
+
+> tanish's branch got 44.47. should we just adopt his
+
+> rather tanishs new code is in main
+
+(Work: `origin/tanish` holds only the stock notebook; the entry is in `origin/main`
+`DuQuantum_submission_FINAL.ipynb`. Measured it with the notebook's `score_solution` on all 56
+cases: 41.47 (exact, routed, whitelisted), winning six cases with whole-state circuits from the
+teammates' Bridges-2 synthesis runs (`_PSC` table). Imported those circuits as
+`results/synth/D*_psc_s*.json`, made `synth.py --bonus-export` rank by moments after `_pack`,
+re-exported `_BONUS_SYNTH`: bonus **44.47**. Adopted three of them for the hardware table
+(D⁷₃ 18 CZ, D⁸₃ 30, D⁸₄ 26) after measuring on 3 calibrations; kept ours where the fewer-CZ
+circuit measured worse or lost a robust angle pick. Regenerated and benchmarked
+`submission.ipynb`, updated ARCHITECTURE/README/CLAUDE/writeup, committed and pushed `richard`.)
+
+### Prompts 53–58 (Sun Oct 25, 08:00–08:15 ET)
+
+> also benchmark DuQuantum_submission_FINAL_v2.ipynb, tanish's new submission. then after we
+> should plan to merge the best of both if needed, or default to tanish's
+
+> the v2 should exist in the local directory / (path on the laptop) / wait its not on local, i
+> forgot we're in VM. i added the v2 into tanish branch
+
+> etas? / why is ETA 40min? ideally we need this to be done in the next ~15min
+
+> based on the v2 score we should determine if it is worth combining or rather just superseding
+
+(Work: benchmarked `origin/main` `DuQuantum_submission_BEST_OF_BOTH.ipynb` and `origin/tanish`
+`DuQuantum_submission_FINAL_v2.ipynb` (same bonus cell): bonus 44.27 vs our 44.47 with the
+notebook's scorer (56 cases, all exact); hardware cell vs ours on D⁹₃, D⁹₄, D¹⁰₃, D¹⁰₄, D¹⁰₅ under
+gate and idle noise, 3 calibrations: ours ahead on every case by 2–10% (ARCHITECTURE.md section 6).
+To meet the 15-minute budget the full-range comparison and the standard-track notebook benchmark
+were stopped and only the organizer's cases were run. Decision: ours supersedes; nothing merged.)
+
+## Session 6 — Sun Oct 25, 2026 (writeup and animations, branch `bryan`)
+
+### Prompt 59 (model: Claude Opus 5.5)
 
 > can you rewrite main.tex so the math is understandable from a freshman undergraduate level and so
 > that it uses @alan.sty for styling?
@@ -453,7 +579,7 @@ unchanged from the previous version. The local TeX Live lacks `derivative`, `yhm
 `thmtools`, so the assistant built them from CTAN in a scratch directory to check that the
 document compiles: 14 pages, with no errors or warnings.)
 
-### Prompt 45 (model: Claude Opus 5.5)
+### Prompt 60 (model: Claude Opus 5.5)
 
 > further simplify @main.tex - we plan on including snippets of it as part of our final
 > submission, so it should make sense to a new undergraduate reader and be able to be explained by
@@ -472,7 +598,7 @@ version. Two wordings were changed for accuracy: 1% imbalance gives λ ≈ 0.9, 
 "far fewer rounds than a line" rather than log N rounds. It compiled to 6 pages, down from 14,
 with no warnings.)
 
-### Prompt 46 (plan mode, model: Claude Opus 5.5)
+### Prompt 61 (plan mode, model: Claude Opus 5.5)
 
 > /plan I want to create manim animations / visualizations based on the docs in
 > @docs/writeup/main.tex. Plan it
@@ -491,3 +617,11 @@ seed 0 the W₂ pair scan picks the same pair as the generic tree layout, so the
 scene shows the scan's spread (best 79.6, median 41.2, worst 20.1 E[S]) instead of the
 writeup's seed-averaged +9%.)
 
+### Prompt 62 (model: Claude Opus 5.5)
+
+> can you update branch bryan with what's currently in main?
+
+(The assistant merged `origin/main` into `bryan`. Conflicts: README.md kept both command
+blocks; prompts.md put main's Session 5 first and renumbered this branch's prompts 44–46
+to 59–61; `docs/writeup/main.tex` kept this branch's simplified four-idea rewrite, leaving
+out the bonus-track section main had added to the older version.)

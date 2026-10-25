@@ -69,6 +69,17 @@ What this implies (derive these on a slide; numbers checked by Monte Carlo):
   δ_rms ≈ 0.6%, so for small K, pick readout-matched qubits. Pre-compensating amplitudes is
   forbidden because the noiseless state must be exact.
 
+**Organizer revision (Sun Oct 25, 04:01 ET email).** The preliminary scoring now averages
+1/score over trials and reports 1/avg(1/score) = 1/E[z + x]; the plain mean was numerically
+unstable. For the tested pairs (10,3), (10,5), (15,4) that makes the score ≈ 1/(1/f + x): total
+gate error (f) and coherence (x) decide, imbalance only matters through λ/K (small K). The
+organizer also changed max_correlator_size and may change the pairs again. Standings then:
+Tanish's preliminary combined submission 1.332, ours ("submission - Bryan Zhong") 1.242,
+Kai Sandberg 1.220; our circuits were ahead on (10,3) and behind on (10,5) and (15,4). The
+response (ARCHITECTURE.md sections 2 and 4): an exact single-qubit merge pass that removes the
+vendored circuits' dense CPMG pulses, and three fewer-CZ small-N circuits from the teammates'
+Bridges-2 synthesis. Final scoring is on hardware per the notebook, so sparse XY4 DD stays.
+
 Sources of imbalance to watch: miscalibrated rotation angles, qubit-to-qubit readout
 error differences (1→0 errors ≈ 2× the 0→1 rate), and noise-induced redistribution
 inside the subspace. Excitation-preserving constructions (B-E, Givens trees) keep n
@@ -139,8 +150,13 @@ reward "shallow for large N·n". Must produce the exact state on every measureme
 branch (no post-selection). Willow readout-line rule: measuring any qubit on an
 anti-diagonal (row + col = const) requires measuring all qubits on it — data qubits
 and measured ancillas must sit on disjoint anti-diagonals (not checked by
-`validate_circuit`). Idea: prepare Dicke states on blocks in parallel, fuse via
-ancilla measurements + corrections. Expect log-ish depth, not constant.
+`validate_circuit`). **Decided (Oct 25): the entry is unitary.**
+`Willow105.validate_circuit` rejects classically controlled operations (measurement alone
+passes), and for N ≤ 15 every measurement-based scheme costed deeper than the unitary
+constructions. The entry picks the shallowest of several exact candidates
+(`bonus_candidates` in main.py; ARCHITECTURE.md §5). Organizer feedback on the first
+submission: 37.15 (ours) vs 41.10 (leader) on `score_solution`; now 44.47 after merging the
+teammates' Bridges-2 whole-state circuits as candidates (their own entry measures 41.47).
 
 ## Known issues in the provided notebook
 

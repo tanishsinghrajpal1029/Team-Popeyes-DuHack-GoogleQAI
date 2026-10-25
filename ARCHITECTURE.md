@@ -43,9 +43,26 @@ expectation finite. A resampled mean there is dominated by a handful of lucky dr
 
 **Assumptions:**
 - max_correlator_size M = N, the strictest choice. The CSVs also record M = 4.
+
+**Revised aggregate (organizer email, Sun Oct 25, 04:01 ET).** The preliminary ranking now
+averages 1/score over trials and reports 1/avg(1/score), i.e. **1 / E[z + x]**, because the
+plain mean "approaches infinity in the absence of noise". That removes the heavy tail: with
+E[χ²] = K − 1 + λ,
+
+    1 / E[z + x] ≈ 1 / ( (K − 1 + λ) / (K f) + x )  ≈  1 / (1/f + λ/(K f) + x)  for large K.
+
+So for the tested pairs (D¹⁰₃, D¹⁰₅, D¹⁵₄; K = 120, 252, 1365) the score is set by the
+right-weight fraction f (total gate error) and the X term x; population imbalance only matters
+through λ/K, i.e. for small K. Every CSV already carries this quantity as `loss_mean_*`
+(= E[z + x]); the tables in section 4 marked "hm" report 1/E[z + x]. The organizer may change
+the (N, n) pairs again, so both views are kept.
 - The calibrations are the notebook's fake-data generators with seeds 0, 1, 2.
 
 ## 2. Architecture (`main.py`)
+
+The deliverable is `submission.ipynb`: the challenge notebook with `main.py` embedded verbatim
+(`experiments/make_notebook.py --run` regenerates and executes it; `experiments/bench_notebook.py`
+scores it with the notebook's own functions). Everything below describes `main.py`.
 
 ```
 create_dicke_state(N, n, calibration)
@@ -65,7 +82,8 @@ create_dicke_state(N, n, calibration)
 
 On the hardware track, k = 2 at N = 6–8 goes to Bryan before `_SYNTH` is consulted, and every
 other k ≥ 2 case up to N = 8 has a `_SYNTH` entry, so SCS and routed B-E run there only as
-fallbacks. They are the main path for the bonus entry (`bryan=False`) and for N > 20.
+fallbacks. They are the main path for N > 20; the bonus entry has its own candidate set
+(section 5).
 
 The Dicke state is permutation-symmetric, so we return wherever the logical qubits end up.
 Routing permutations never need undoing.
@@ -79,10 +97,32 @@ keeps the one with the best predicted log-fidelity. Under our harness (`vs_bryan
 beats ours for k = 2 with N ≥ 6 (1–7%, about 3 fewer CZ) and for k ≥ 3 with N ≥ 9 (21–39%;
 D¹⁰₅ needs 85 CZ vs our 185). Ours win the W states, k = 2 up to N = 5, and k ≥ 3 up to
 N = 8 (by up to +28%). `main.py` vendors his file verbatim (four renames to avoid name
-clashes) and dispatches by that measured rule. The bonus entry returns the shallower of the
-two solutions per case. His derivations of every building block (known-target rotations,
+clashes) and dispatches by that measured rule. The bonus entry picks the shallowest of several
+candidates, his among them (section 5). His derivations of every building block (known-target rotations,
 the 2-CZ transfer bound, the 5-CZ G₃, the merged 4-CZ top block) are in
 `docs/bryan_constructions.md`.
+
+**Single-qubit merge pass (`_merge_single_qubit_runs`, Oct 25).** Every circuit `build`
+returns goes through one exact pass: each run of single-qubit gates on a qubit between its
+two-qubit gates is folded into one PhasedXZ (dropped if it is the identity up to phase), kept at
+the moment index of the run's last gate, then empty moments are dropped and our sparse XY4
+`_add_dd` runs on the result. Nothing moves earlier, so no qubit leaves |0⟩ sooner; moments can
+only fall. The vendored constructions echoed every idle single-qubit slot with a π pulse
+(CPMG), which was 60% of their single-qubit gates at N ≥ 9: D¹⁵₄ 777 → 276 before DD (424 with
+XY4 on long windows), D¹⁰₅ 371 → 230, D⁹₄ 286 → 170. In the calibrations the single-qubit error
+budget of those circuits was as large as the CZ budget (D¹⁵₄: Σ 0.33 vs 0.27), so under
+per-gate noise the pulses only cost. Measured effect, section 4 ("hm" table): +1–11% at N ≥ 9
+under gate noise, +0–21% under idle noise, +0–1% at N ≤ 8.
+
+**Circuits adopted from the teammates' Bridges-2 synthesis (Tanish/Aanha, `origin/main`
+`DuQuantum_submission_FINAL.ipynb`, `_PSC` table; imported as
+`results/synth/D*_psc_s*.json`).** The same Ry + CZ ansatz as `synth.py`, run with more seeds.
+Hardware table: D⁷₃ 18 CZ (was 25; +3.3% gate / +3.7% idle), D⁸₃ 30 CZ L-shape (was 31;
++0.7% / +2.3%), D⁸₄ 26 CZ (was 29; +0.6% / +1.3%), all on 3 calibrations (`psc_hw*.csv`).
+Not adopted: D⁵₂ 9 CZ (+0.8%, loses the robust angle pick for K = 10), D⁶₃ 14 CZ (−3% idle);
+D⁶₂/D⁷₂/D⁸₂ go to Bryan's path, so their table entries do not matter for hardware. Bonus
+table (`_BONUS_SYNTH`, now ranked by packed moments): D⁷₂ 17, D⁸₂ 21, D⁸₃ 27, D⁸₄ 23, D⁹₂ 23,
+D⁹₃ 31, D⁹₄ 41, D¹⁰₂ 26.
 
 - **W tree (k = 1).**
   - Amplitude starts on a root. Each round, every qubit holding amplitude hands its
@@ -209,8 +249,8 @@ with no over-rotation, on held-out calibrations, so the rows were not re-simulat
 **Portfolio (current `main.py`, `portfolio.csv`).** Σ E[score] **102.0** and Σ median **27.9**,
 vs 101.0 / 26.9 for our constructions alone and 100.5 / 27.2 for Bryan's alone. The per-case
 rows above are our constructions; for k = 2 with N ≥ 6 and k ≥ 3 with N ≥ 9 the deployed numbers
-are Bryan's (`vs_bryan.csv`). Bonus: 37.2, the shallower of the two per case (ours 23.8,
-Bryan's 35.3).
+are Bryan's (`vs_bryan.csv`). Bonus: 43.79 (`bonus_variants.csv`; section 5), up from 37.15
+when the entry only chose between ours (23.8) and Bryan's (35.3).
 
 **Against the preliminary combined submission** (`prelim_vs_latest.csv`; teammates'
 `tanish_submission.py` at commit `1995558`, which uses an older copy of ours for 4 ≤ N ≤ 8 and
@@ -220,11 +260,37 @@ Aanha's builder for N ≥ 9; same harness, 3 calibrations):
 |---|---|---|
 | Σ median (25 cases, N ≤ 10) | 27.53 | **27.99** |
 | Σ E[score] | 90.77 | **102.88** |
-| bonus `score_solution` | 33.67 | **37.15** |
+| bonus `score_solution` | 33.67 | **43.79** |
 
 The current submission wins k = 2 at N ≥ 6 (up to +16% at D¹⁰₂, from 31 vs 49 CZ), k = 3–4 at
 N = 9–10 (+4–5%) and N ≤ 3. The preliminary one wins D¹⁰₅ (−5%), D⁹₄ (−4%) and W₉/W₁₀
 (−0.5/−1.5%); see section 6 for why.
+
+**Under the organizer's revised aggregate ("hm" = 1/E[z + x], section 1; 3 calibrations,
+`newmetric_*.csv`, `merge_small_*.csv`, `psc_hw*.csv`, `bign/traj_N15_n4_*.csv`).** The
+organizer's preliminary table had the preliminary combined submission (Aanha's builder at
+N ≥ 9) ahead of ours on D¹⁰₅ (0.433 vs 0.358) and D¹⁵₄ (0.509 vs 0.398) and behind on D¹⁰₃
+(0.390 vs 0.486). Our harness reproduces the signs but not the size; the per-gate error budgets
+pointed at the dense π pulses, and removing them (merge pass) puts the deployed circuits ahead
+on every case under both noise presets:
+
+| case | deployed before (gate / idle) | **now** (gate / idle) | preliminary combined (gate / idle) |
+|---|---|---|---|
+| D⁷₃ | 0.904 / 0.841 | **0.934 / 0.872** | 0.904 / 0.840 |
+| D⁸₃ | 0.872 / 0.787 | **0.878 / 0.805** | 0.833 / 0.739 |
+| D⁸₄ | 0.862 / 0.789 | **0.867 / 0.799** | 0.859 / 0.784 |
+| D⁹₃ | 0.790 / 0.661 | **0.806 / 0.669** | 0.761 / 0.619 |
+| D⁹₄ | 0.692 / 0.536 | **0.724 / 0.536** | 0.691 / 0.521 |
+| D¹⁰₂ | 0.882 / 0.822 | **0.889 / 0.827** | 0.818 / 0.708 |
+| D¹⁰₃ | 0.765 / 0.639 | **0.776 / 0.639** | 0.722 / 0.582 |
+| D¹⁰₄ | 0.651 / 0.501 | **0.681 / 0.511** | 0.621 / 0.463 |
+| D¹⁰₅ | 0.569 / 0.421 | **0.603 / 0.421** | 0.582 / 0.413 |
+| D¹⁵₄ (trajectories, seed 0) | 0.491 / 0.318 | **0.546 / 0.351** | 0.447 / 0.310 |
+
+Dropping DD entirely ("lean", `newmetric_N6_10_*.csv`) is another +1–5% in simulation
+(D¹⁰₅ gate 0.631, D¹⁵₄ idle 0.384), but the notebook says the final run is on hardware where
+dynamical decoupling matters, so the sparse XY4 on long windows stays. The Markovian presets
+cannot show a DD gain; the quasi-static `full` preset was too slow at N = 9–10 to finish.
 
 **Totals over these 25 cases (our constructions only):**
 
@@ -248,9 +314,66 @@ N = 9–10 (+4–5%) and N ≤ 3. The preliminary one wins D¹⁰₅ (−5%), D�
 - Calibration dicts with reversed or duplicated pair keys, list or numpy values, missing
   readout entries, or couplers to uncalibrated qubits all work.
 
-**Bonus entry.** `create_dicke_state_adaptive` returns the shallower of our constructions
-(uniform calibration, no DD, packed for depth) and Bryan's bonus solution. It is not adaptive
-yet. `score_solution` over 2 ≤ N ≤ 15 gives 37.2.
+**Bonus entry** (`create_dicke_state_adaptive`, `bonus_candidates`; `experiments/bonus_depth.py`,
+`results/bonus_variants.csv`). The organizers' first feedback (Sat night) put our bonus at 37.15
+against a leader at 41.10. All 56 cases were present and exact, so the gap was depth. The entry
+now builds every exact candidate below, checks nothing else, and returns the shallowest after
+`_pack` (mixed 1q/CZ moments). `score_solution` over 2 ≤ N ≤ 15: **44.47** (37.15 at the first
+feedback, 43.79 before the teammates' Bridges-2 circuits were merged in; the leader's
+first-round number was 41.10; the teammates' own bonus entry measures 41.47 with the same
+scorer, section 6).
+
+- *Unitary on purpose.* `cirq_google.Willow105.validate_circuit` rejects classically
+  controlled operations (`X.with_classical_controls(m)`: "gate which is not supported");
+  plain measurement and reset pass. A feedforward circuit would fail the validator the
+  notebook tells judges to use, and for N ≤ 15 every measurement-based scheme we costed is
+  deeper anyway (section 6 of `docs/bryan_constructions.md`).
+- *Candidates.* (1) ours via `build(..., dd=False, bryan=False)` for k ≤ 1 or N ≤ 8; (2) Bryan's
+  bonus solution; (3) for k = 1, Aanha's broadcast W tree (ported from `origin/Aanha` `w_tree.py`
+  with uniform costs, every root): its staggered rounds pack 1–2 moments shallower than ours
+  (W₉ 12 vs 14, W₁₀–₁₂ 13 vs 14, W₁₃–₁₅ 14 vs 15, W₅ 9, W₆/W₇ 10); (4) for k ≥ 2, two-arm split
+  variants: thermometer on either arm, bottom-up or top-down thermometer order, and the last
+  m0 ∈ {3, …, 7} positions of each arm's B-E unitary replaced by a synthesized block
+  (`_TAIL`, `experiments/tail_synth.py`); m0 equal to the arm length makes the whole arm one
+  block, which is what wins for k = 2 (U₇ r≤2, 27 moments, vs a 37-moment sweep arm) and
+  k ≤ 4 at N ≤ 12 (U₆ r≤4, 43 vs 97); (5) whole-state synthesized circuits ranked by layer
+  count rather than CZ count (`_BONUS_SYNTH`, `synth.py --bonus-export`, since Oct 25 ranked by
+  moments after `_pack`): D⁵₂ 13 (was 15), D⁶₃ 15 (17), D⁷₃ 21 (23), D⁸₄ 24 (25), D⁹₂ 25 (28),
+  D⁹₄ 59 (70); with the teammates' Bridges-2 circuits (section 2) D⁷₂ 17, D⁸₂ 21, D⁸₃ 27,
+  D⁸₄ 23, D⁹₂ 23, D⁹₃ 31, D⁹₄ 41, D¹⁰₂ 26.
+- *Where the depth was.* A split circuit is 2·(CZ depth)+1 moments with the CZ depth set by
+  the B-E sweep: D¹⁵₇ was 160 moments, 147 of them the 8-qubit arm alone; each arm position
+  costs ~18 moments at k ≥ 5 (10 at k = 3, 5 at k = 2), and the last four positions are a
+  strictly serial 41-moment tail (35 at k = 3). The tail is the small Dicke unitary
+  U_{m0}: |0^{m0−r}1^r⟩ → |D^{m0}_r⟩, r ≤ min(k, m0), an isometry we synthesize exactly with
+  `scs_synth.BatchCircuit` (fewest layers first): U₃ r≤3 17 moments (sweep 19), U₄ r≤3 23 (35),
+  U₄ r≤4 29 (41), U₅ r≤3 31 (49), U₅ r≤4 43 (69), U₆ r≤2 27, U₆ r≤3 39 (63), U₆ r≤4 43 (81),
+  U₄ r≤2 19, U₅ r≤2 23, U₆ r≤2 27, U₇ r≤2 27, U₇ r≤3 43 (77), U₇ r≤4 55 (one seed of 36 reached 27 layers; three others 29), U₈ r≤2 31; U₅ r≤5, U₆ r≤5 and U₈ r≤3 were not found exact within 25–60 min on 10–13 seeds each (best 1e-3 to 1e-2); a 2×4 ladder shape
+  for the 6–8 qubit blocks was worse than the path (U₆ r≤4 not exact at 30 layers vs 21). The layer count found varies
+  2–6 between seeds (U₄ r≤4: 14–21 layers over 12 seeds), so every block got 8–13 seeds.
+  Effect: D⁹₃ 54 → 36, D¹¹₄ 88 → 51, D¹²₄ 88 → 51, D¹³₂/D¹⁴₂ 40 → 31, D¹⁵₂ 46 → 36,
+  D¹³₃/D¹⁴₃ 82 → 48/49, D¹³₄/D¹⁴₄ 106 → 62/63, D¹⁵₃ 96 → 62, D¹⁵₄ 124 → 84, D¹⁵₇ 160 → 144.
+  Moments per case now (`notebook_bonus.csv`), by n:
+
+  | n | moments for N = n·2 … 15 |
+  |---|---|
+  | 1 | 3, 6, 7, 9, 10, 10, 11, 12, 13, 13, 13, 14, 14, 14 (N = 2…15) |
+  | 2 | 7, 13, 16, 17, 21, 23, 26, 31, 31, 31, 31, 35 (N = 4…15) |
+  | 3 | 15, 21, 27, 31, 37, 45, 45, 48, 49, 62 (N = 6…15) |
+  | 4 | 23, 41, 51, 51, 51, 62, 63, 84 (N = 8…15) |
+  | 5 | 73, 88, 94, 106, 112, 124 (N = 10…15) |
+  | 6 | 103, 116, 124, 134 (N = 12…15) |
+  | 7 | 133, 144 (N = 14, 15) |
+
+  What is left is the k ≥ 5 family (12 cases, 8.5 points): their arms carry every weight up to
+  the arm length, and no exact block beyond U₄ r≤4 was found for them. The thermometer order never changed a winner (bottom-up always won); putting
+  the thermometer on the non-critical arm did, by 2–6 moments.
+- k = 2: a *partial* tail does not beat the 4-CZ top blocks (U₃ r≤2 15 vs 13, U₄ r≤2 19 vs 19),
+  but a whole-arm block does (U₆/U₇ r≤2 at 27 moments), so D¹¹₂–D¹⁵₂ dropped 3–10 moments;
+  D¹⁰₂ (arms of 5) stays at Bryan's 28.
+- Every candidate is checked for exactness (1e-9), routing and the strict gate whitelist in
+  `bonus_depth.py` and `tests/test_validity.py` (all 56 cases, plus a no-regression check
+  against `notebook_bonus.csv`). Slowest build: about 3 s.
 
 **Known gaps, by expected value:**
 1. **W₂/W₃ X-term floor.** These cases still hold most of the remaining expected gap: 73.5 of
@@ -308,6 +431,31 @@ ahead by 3–13% except at N = 12 (tie). Two reasons:
   so about half its edge there is this timing assumption. **Open question:** do mixed CZ + 1q
   moments behave on Willow as the model assumes? `_to_cz_phxz` deliberately stratifies.
 
+**Teammates' final bonus entry** (`origin/main` `DuQuantum_submission_FINAL.ipynb`, cell 15; measured
+with the notebook's `score_solution` semantics, all 56 cases exact, routed, whitelisted): **41.47**.
+It wins D⁷₂ (19 vs our 21), D⁸₃ (27 vs 29), D⁹₂ (23 vs 25), D⁹₃ (31 vs 36), D⁹₄ (41 vs 50) and
+D¹²₆ (102 vs 103) and loses every k ≥ 3 case at N ≥ 10 (D¹⁵₃ 74 vs 62, D¹⁴₄ 78 vs 63). Its wins
+are whole-state circuits from the Bridges-2 synthesis runs; those are now candidates in our entry
+(section 2), which takes the per-case minimum: 44.47.
+
+**Teammates' combined notebooks, Sun 08:00 ET** (`origin/main` `DuQuantum_submission_BEST_OF_BOTH.ipynb`
+and `origin/tanish` `DuQuantum_submission_FINAL_v2.ipynb`; same bonus cell, different hardware
+cell). Bonus with the notebook's scorer: **44.27** vs our 44.47; it is shallower only on D¹²₆
+(102 vs 103) and deeper on D⁷₂, D⁸₂, D⁸₄, D¹⁰₂ by 1–2 moments. Hardware cell, 1/E[z + x] on 3
+calibrations (`vs_v2_focus_*.csv`; its N ≥ 9 builder is Aanha's, same gate counts as the
+preliminary combined submission):
+
+| case | ours, gate / idle | v2, gate / idle |
+|---|---|---|
+| D⁹₃ | **0.806 / 0.669** | 0.761 / 0.619 |
+| D⁹₄ | **0.724 / 0.536** | 0.691 / 0.521 |
+| D¹⁰₃ | **0.776 / 0.639** | 0.722 / 0.582 |
+| D¹⁰₄ | **0.681 / 0.511** | 0.621 / 0.463 |
+| D¹⁰₅ | **0.603 / 0.421** | 0.582 / 0.413 |
+
+Decision (Richard, 08:15 ET): our `main.py` / `submission.ipynb` supersedes; nothing further is
+merged (the one D¹²₆ moment is worth 0.007 points).
+
 **What did not work:**
 - **Whole-state re-synthesis at N = 9–10** (`synth.py`, overnight, 24 workers, stopped): best
   exact circuits D9,2 33 CZ, D10,2 35, D9,4 98, D9,3 136, vs 27, 31, 63, 50 deployed.
@@ -317,12 +465,39 @@ ahead by 3–13% except at N = 12 (tie). Two reasons:
   8 times (best residual 1.6e-4); the split construction is locally tight.
 - **ALAP scheduling** (keep qubits in |0⟩ longer): −1.4 to +0.1% E[score] under idle noise; removed.
 
+**Bonus depth: what did not work** (Oct 25, before the levers in section 5):
+- Givens-only brickwork (excitation-preserving, 2 CZ per gate) on 2D patches: D⁸₄ still at
+  2e-3 infidelity after 13 rounds; D⁶₃ needs 7 rounds (16 gates) where Ry+CZ needs 7 layers.
+- Ry+CZ brickwork on 2D patches instead of paths: more layers, not fewer (D⁶₃ 9–10 vs 7;
+  D⁷₃ and D⁸₄ not exact by L = 13–14). Complex single-qubit layers (full PhasedXZ, 3× the
+  parameters): the same minimal layer count (D⁶₃ 7). The minimal layer count is a property of
+  the brickwork, not of the parameter budget, and it grows faster than N: from-scratch
+  synthesis stops paying at N ≈ 8 regardless of ansatz.
+- Divide-and-conquer beyond two arms: a weight split on a *superposed* unary register costs
+  O(k) controlled rotations per thermometer bit, i.e. about as much as the B-E sweep it would
+  replace; at N ≤ 15 the constants eat the asymptotic gain.
+- Top-down thermometer (arm's own first sweep can start after two bits): exact, never shallower
+  than bottom-up with the thermometer on the non-critical arm.
+- **Re-synthesis of N ≤ 8 with 8 more seeds per shape** (`results/synth/smallN_seeds.log`) found
+  fewer CZs for D⁵₂ (9 vs 10), D⁶₃ (14 vs 15) and D⁷₃ (22 vs 25), but on three calibrations
+  (`synth_reseed.csv` vs `portfolio.csv`) none measures better: D⁶₃ is worse (median 0.91–0.95
+  vs 0.96, λ 0.8–1.0 vs 0.25), D⁵₂ and D⁷₃ are ties within sampling noise while losing their
+  robust angle picks. The hardware table was left as deployed; the same runs did shave bonus
+  moments (D⁵₂ 15 → 13, D⁷₃ 23 → 21, via `_BONUS_SYNTH`).
+
 ## 7. Maintenance notes
 
 - **Exports rewrite `main.py`** between `BEGIN`/`END` markers: `synth.py --export` → `_SYNTH`
   (applies `results/vqe/picks.json` only when structure and solution match);
-  `scs_synth.py --export` → `_SCS`; `vqe.py apply` → `picks.json` (follow with `synth.py --export`).
+  `scs_synth.py --export` → `_SCS`; `vqe.py apply` → `picks.json` (follow with `synth.py --export`);
+  `tail_synth.py --export` → `_TAIL`; `synth.py --bonus-export` → `_BONUS_SYNTH` (bonus only).
   After any change to `main.py`, run `experiments/make_notebook.py --run`.
+- **Synthesis result files are named by (case, shape, seed)**: a rerun with an already-used seed
+  overwrites the earlier JSON (this happened to `D8_3_path_s1/s2` on Oct 25; the originals were
+  restored from git and the reruns kept as `*_rerun.json`). Use fresh seeds for new runs.
+- **Bonus section of `main.py`** (after `# ---- bonus track`) is the only place that may change
+  the bonus entry; the hardware path is frozen and `tests/test_golden_small_n.py` guards it.
+  Aanha's W tree is ported there with attribution (uniform costs, every root).
 - **Bryan's code is vendored verbatim** with renames `_X → _BRYAN_X`, `_Y → _BRYAN_Y`,
   `create_dicke_state(_adaptive) → _bryan_create_dicke_state(_adaptive)`. Our `_X`/`_Y` are DD
   pulses.
