@@ -77,7 +77,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1   # parallel jobs: one BLAS thre
 # slide figures (score_tail, ceiling_fraction*, cz_counts*, tree_vs_chain)
 .venv/bin/python experiments/figures.py
 
-# manim animations of the writeup's four ideas -> figures/anim/ (setup: see "Animations" below)
+# manim animations of the writeups' math -> figures/anim/ (setup: see "Animations" below)
 .venv/bin/python animations/prep.py && animations/render.sh
 
 # bonus track (depth only): tail blocks, depth-ranked whole-state picks, per-case candidate table
@@ -131,14 +131,17 @@ the same CZ pattern has many exact angle sets, and they respond differently to e
 
 ## Animations
 
-Manim scenes for the four ideas in `docs/writeup/main.tex`, for the talk and this README.
-Every number on screen comes from our code: `animations/prep.py` runs `main.py` and
-`experiments/*` on calibration seed 0 and writes `animations/data/*.json`, and the scenes read
-only those files. The CZ table in Synthesis is copied from the writeup.
+Manim scenes for the four ideas in `docs/writeup/main.tex` and for the derivations in
+`docs/main.tex`, for the talk and this README. Every number on screen comes from our code:
+`animations/prep.py` runs `main.py` and `experiments/*` on calibration seed 0 and writes
+`animations/data/*.json`, and the scenes read only those files. Table values that come from
+result CSVs summarized in `docs/main.tex` (the routed B-E CZ counts, the Results rows, the
+organizers' pairs, the bonus depths) are copied into `prep.py` and marked there.
 
 ```bash
 uv pip install --python .venv/bin/python --prerelease=allow -r animations/requirements.txt  # manim 0.22.0
-.venv/bin/python animations/prep.py          # ~15 s, asserts the numbers quoted in the writeup
+.venv/bin/python animations/prep.py          # under a minute; asserts the numbers quoted in the writeups
+.venv/bin/python animations/prep.py merge    # or only some data files
 animations/render.sh                         # all scenes; or e.g. animations/render.sh WTree
 .venv/bin/manim -ql animations/scenes.py WTree   # quick preview
 ```
@@ -153,6 +156,11 @@ animations/render.sh                         # all scenes; or e.g. animations/re
 | `WTree` | tree vs line on a toy, then the real W₁₀ tree and chain on Willow racing in circuit moments (15 vs 37) |
 | `Synthesis` | brickwork depth search, L-BFGS loss to 10⁻¹³, CZ pruning 6 → 5 for D⁴₂, CZ table vs textbook |
 | `Placement` | Willow coloured by CZ error, beam search for a 6-qubit path, readout matching, W₂ pair scan |
+| `RevisedScore` | E[S] against the organizers' 1/E[z+x]: the K = 2 tail vanishes; E[z+x] split into errors, imbalance and x for D⁴₂ and D¹⁰₅; the organizers' three pairs |
+| `TransferBound` | why one CZ cannot do a later W transfer: CZ entangles only superposed inputs (live concurrence), the two-case proof, 2N − 3 |
+| `CoherentErrors` | over-rotation moves populations at O(ε), phase errors at O(ε²), in the complex plane and measured on the deployed D⁴₂; minimax-regret angle pick |
+| `MergePass` | D¹⁵₄ timelines with dense CPMG pulses folded into one PhasedXZ per run (777 → 276), Σe before/after, then sparse XY4 |
+| `BonusDepth` | the depth score, where D¹⁵₇'s moments go (147 of 160 in one arm), the U_{m₀} isometry with 3 of 128 columns fixed, 37.15 → 44.47 |
 
 ![ScoreTail](figures/anim/ScoreTail.gif)
 ![WTree](figures/anim/WTree.gif)
@@ -180,7 +188,7 @@ experiments/make_notebook.py  main.py -> submission.ipynb
 experiments/bench_notebook.py submission.ipynb scored by its own overall_score / score_solution
 docs/                   Bryan's derivations of his building blocks
 docs/writeup/           LaTeX appendix on the mathematical choices (compile main.tex in Overleaf)
-animations/             manim scenes of the writeup (prep.py -> data/*.json -> scenes.py -> figures/anim/)
+animations/             manim scenes of both writeups (prep.py -> data/*.json -> scenes.py -> figures/anim/)
 experiments/results/    every CSV behind the slides
 tests/                  pytest suite
 prompts.md              every AI prompt used (sponsor requirement)

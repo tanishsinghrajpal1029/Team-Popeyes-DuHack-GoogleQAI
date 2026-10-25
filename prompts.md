@@ -625,3 +625,93 @@ writeup's seed-averaged +9%.)
 blocks; prompts.md put main's Session 5 first and renumbered this branch's prompts 44–46
 to 59–61; `docs/writeup/main.tex` kept this branch's simplified four-idea rewrite, leaving
 out the bonus-track section main had added to the older version.)
+
+### Prompt 63 (model: Claude Opus 5.5)
+
+> the code behind @submission.ipynb has changed a bit since the latex writeup at @docs/main.tex
+> was originally written - can you make sure main.tex remains accurate? If there's any other
+> major points, please update main.tex. Make sure to keep the same level of explainability and
+> interpretability in the latex file. Don't worry about the manim animations or other parts of
+> the code.
+
+(The assistant compared `docs/main.tex` with `main.py` and ARCHITECTURE.md since the writeup's
+commit, re-ran `experiments/evaluate.py` on the final `main.py` (25 cases, seeds 0–2, idle noise,
+20k repeats; `results/wf_*.csv`) and updated the writeup: the organizers' revised 1/E[z+x]
+ranking, the teammates' Bridges-2 circuits for D⁷₃/D⁸₃/D⁸₄ (18/30/26 CZ), which robust angle
+picks are still deployed, the single-qubit merge pass and the decision to keep sparse DD, a
+bonus-track section (unitary entry, depth anatomy, synthesized U_{m0} blocks, 44.47), two more
+"did not work" items, and a refreshed results table.)
+
+### Prompt 64 (model: Claude Opus 5.5)
+
+> @docs/main.pdf does not follow @docs/alan.sty - can you make sure @docs/main.tex explains
+> mathematical concepts at a level understandable to a new undergraduate and it's readable,
+> similar in style to @docs/writeup/main.tex
+
+(The assistant moved `docs/main.tex` to `scrartcl` + `alan.sty` like the writeup (title/abstract,
+`\vocab` terms, definition/lemma/claim/example/remark boxes, `\Cref`) and kept every number and
+claim. It added undergraduate-level background (qubits, Pauli/R_y/CZ matrices, the simulated noise
+model), short proofs (ideal correlators, the Krawtchouk counting step, E[1/χ²_ν] = 1/(ν−2) via the
+gamma function, the K = 2/3 closed forms, why one CZ cannot do a Givens transfer, first-order
+over-rotation vs phase errors), and plain explanations of noncentral χ², the B-E recursion, isometry
+blocks and the common-sign loss, minimax regret, readout variance without replacement, the winner's
+curse, and DD. Builds cleanly with pdflatex + bibtex, 15 pages.)
+
+### Prompt 65 (model: Claude Opus 5.5)
+
+> check if @docs/main.tex accurately depicts the main ideas in @submission.ipynb
+
+(The assistant confirmed the notebook's code cell is `main.py` with the bonus function moved to its
+own cell, then checked the writeup against the code and result CSVs. Dispatch, constructions, DD,
+merge pass, scoring formulas and bonus depths matched. It found one false claim (SCS blocks as "the
+main path for N > 20": `_SCS` stops at m = 20 and Bryan's builder takes those cases), stale numbers
+(Σ E[S] 101.0 vs 102.0 in `wf_*.csv`; W₂/W₃/D⁴₂ E[S] from the older ARCHITECTURE table; k ≥ 5 bonus
+share 8.5 vs 7.98 in `notebook_bonus.csv`) and a few oversimplifications.)
+
+### Prompt 66 (model: Claude Opus 5.5)
+
+> yes fix it and rebuild
+
+(The assistant corrected those items in `docs/main.tex` (SCS fallback scope and k = 5 block costs,
+W₂ 66.51, W₃ 8.03, D⁴₂ 1.84, Σ E[S] 102.0, W₂+W₃ 74.5, k ≥ 5 at 8.0 of 44.47 points) and the
+same two statements in ARCHITECTURE.md, then rebuilt `docs/main.pdf` with pdflatex + bibtex: 15
+pages, no errors or undefined references.)
+
+### Prompt 67 (model: Claude Opus 5.5)
+
+> with the updated latex at @docs/main.tex, check if the manim files still accurately depict the
+> mathematical reasoning. If there's new mathematical reasoning/findings, add manim animations for it.
+
+(The assistant compared `animations/` with `docs/main.tex`. Stale: the Synthesis CZ table still
+showed D⁷₃/D⁸₃/D⁸₄ at 25/31/27 (now the teammates' 18/30/26, read from `main._SYNTH`), WTree
+quoted seed-0 X terms (0.0076 → 0.0044) where the docs quote the 3-calibration mean (0.0075 →
+0.0042), and WTree's "2N − 3 either way" sat next to an 18-CZ line that is the routed B-E
+baseline; relabelled. It added five scenes for `docs/main.tex` material that had none, each with a
+`prep.py` step that asserts the quoted numbers: RevisedScore (1/E[z+x] vs E[S], the E[z+x]
+budget of D⁴₂ and D¹⁰₅, the organizers' pairs), TransferBound (the one-CZ impossibility proof
+with a live concurrence |sin 2a sin 2b|, checked against cirq), CoherentErrors (O(ε) vs O(ε²)
+in the complex plane, re-measured on the deployed D⁴₂: 10× and 100× per decade; minimax
+regret), MergePass (Bryan's D¹⁵₄ timelines before/after the merge pass and XY4, recomputed:
+777 → 276 → 424 gates, Σe 0.33/0.11/0.18 vs 0.27 CZ), and BonusDepth (depth anatomy of D¹⁵₇,
+the U_{m₀} isometry, 37.15 → 44.47, k ≥ 5 at 8.0 points). README scene table and render list
+updated; the changed and new scenes re-rendered into `figures/anim/`.)
+
+### Prompt 68 (model: Claude Opus 5.5)
+
+> humanize the displayed text and add longer pauses between scene transitions
+
+(The assistant rewrote the on-screen captions and titles of all ten scenes as plain sentences:
+"1 − F = 0.127" became "still off by 0.127", "minimax pick" became "robust pick", "as vendored"
+became "as received", and so on, keeping every number. It added `Beats` to
+`animations/common.py`, a Scene base class that holds the last frame of every beat, and of the
+scene's end, for 2.5 s before the next transition; every scene now subclasses it, so each
+`--save_sections` clip ends on that hold. All ten scenes were re-rendered at low quality and checked
+frame by frame for overflow and overlaps.)
+
+### Prompt 69 (model: Claude Opus 5.5)
+
+> can you commit push and merge this branch into main
+
+(The assistant committed the writeup, animation and result-CSV changes on `bryan`, leaving out
+local scratch files from video editing (`figures/anim/COPY_1_*.mp4`, `mpv-shot0001.jpg`,
+`output.gif`), pushed, and merged `bryan` into `main`.)

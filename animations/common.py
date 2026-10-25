@@ -11,7 +11,7 @@ import os
 
 from manim import (
     BLUE, DOWN, GREEN, GREY_B, GREY_D, LEFT, RED, RIGHT, UL, UP, WHITE, YELLOW,
-    Circle, Dot, Line, Rectangle, TexTemplate, Text, VGroup, config, interpolate_color,
+    Circle, Dot, Line, Rectangle, Scene, TexTemplate, Text, VGroup, config, interpolate_color,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +22,23 @@ MONO = "DejaVu Sans Mono"
 tex = TexTemplate()
 tex.add_to_preamble(r"\newcommand{\ket}[1]{\lvert #1\rangle}")
 config.tex_template = tex
+
+
+class Beats(Scene):
+    """A Scene that holds the last frame of every beat (section), and of the scene itself, for
+    HOLD seconds, so viewers can finish reading before the next transition starts. The hold
+    belongs to the beat it ends, so each --save_sections clip ends on it."""
+
+    HOLD = 2.5
+
+    def next_section(self, *args, **kwargs):
+        if getattr(self, "_started", False):
+            self.wait(self.HOLD)
+        self._started = True
+        super().next_section(*args, **kwargs)
+
+    def tear_down(self):
+        self.wait(self.HOLD)
 
 
 def load(name: str) -> dict:

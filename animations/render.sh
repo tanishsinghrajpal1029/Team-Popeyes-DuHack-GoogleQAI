@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 MANIM=../.venv/bin/manim
 OUT=../figures/anim
 SCENES=("$@")
-[ ${#SCENES[@]} -eq 0 ] && SCENES=(DickeIntro ScoreTail WTree Synthesis Placement)
+[ ${#SCENES[@]} -eq 0 ] && SCENES=(DickeIntro ScoreTail WTree Synthesis Placement RevisedScore TransferBound CoherentErrors MergePass BonusDepth)
 mkdir -p "$OUT/sections"
 for s in "${SCENES[@]}"; do
   $MANIM -qh --save_sections --media_dir media scenes.py "$s"
