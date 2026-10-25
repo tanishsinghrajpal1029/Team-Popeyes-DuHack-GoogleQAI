@@ -452,6 +452,7 @@ preliminary combined submission):
 | D¹⁰₃ | **0.776 / 0.639** | 0.722 / 0.582 |
 | D¹⁰₄ | **0.681 / 0.511** | 0.621 / 0.463 |
 | D¹⁰₅ | **0.603 / 0.421** | 0.582 / 0.413 |
+| D¹⁵₄ (trajectories, seed 0; `bign/traj_N15_n4_v2_*.csv`) | **0.546 / 0.351** | 0.447 / 0.310 |
 
 Decision (Richard, 08:15 ET): our `main.py` / `submission.ipynb` supersedes; nothing further is
 merged (the one D¹²₆ moment is worth 0.007 points).
