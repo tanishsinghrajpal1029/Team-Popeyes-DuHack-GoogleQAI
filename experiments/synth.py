@@ -340,12 +340,21 @@ def export_bonus_table(main_path=os.path.join(os.path.dirname(HERE), "main.py"),
         if infid > TOL:
             print(f"skip {name}: infidelity {infid:.1e}")
             continue
+        # rank by what the bonus scores: moments after main._pack (single-qubit gates may share
+        # a CZ moment, so a 12-layer circuit can pack to 24, not 25), then layers, then CZ
+        import cirq
+        sys.path.insert(0, os.path.dirname(HERE))
+        import main as _main
+        entry = dict(coords=r["coords"], cz_layers=r["cz_layers"], params=r["params"])
+        packed = _main._pack(_main._to_cz_phxz(_main._synth_circuit(entry, cirq.LineQubit.range(r["N"]))))
+        r["packed_moments"] = len(packed)
         key = (r["N"], r["k"])
-        if key not in best or (r["cz_layers_count"], r["cz"]) < (best[key]["cz_layers_count"], best[key]["cz"]):
+        rank = lambda e: (e["packed_moments"], e["cz_layers_count"], e["cz"])
+        if key not in best or rank(r) < rank(best[key]):
             best[key] = r
     lines = [BONUS_BEGIN, "_BONUS_SYNTH = {\n"]
     for (N, k), r in sorted(best.items()):
-        lines.append(f"    ({N}, {k}): dict(  # {r['cz_layers_count']} layers = {2 * r['cz_layers_count'] + 1} moments, {r['cz']} CZ, {r['shape']}, seed {r['seed']}\n")
+        lines.append(f"    ({N}, {k}): dict(  # {r['packed_moments']} moments packed ({r['cz_layers_count']} layers), {r['cz']} CZ, {r['shape']}, seed {r['seed']}{', ' + r['source'] if r.get('source') else ''}\n")
         lines.append(f"        coords={[tuple(c) for c in r['coords']]!r},\n")
         lines.append(f"        cz_layers={[[tuple(e) for e in l] for l in r['cz_layers']]!r},\n")
         lines.append(f"        params={[float(p) for p in r['params']]!r},\n")
@@ -360,7 +369,7 @@ def export_bonus_table(main_path=os.path.join(os.path.dirname(HERE), "main.py"),
     with open(main_path, "w") as fh:
         fh.write(head + "".join(lines) + tail)
     for (N, k), r in sorted(best.items()):
-        print(f"D^{N}_{k}: {r['cz_layers_count']} layers = {2 * r['cz_layers_count'] + 1} moments ({r['shape']}, seed {r['seed']})")
+        print(f"D^{N}_{k}: {r['packed_moments']} moments packed, {r['cz_layers_count']} layers, {r['cz']} CZ ({r['shape']}, seed {r['seed']})")
 
 
 def main_cli():

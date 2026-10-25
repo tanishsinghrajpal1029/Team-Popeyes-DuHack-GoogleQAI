@@ -43,6 +43,19 @@ expectation finite. A resampled mean there is dominated by a handful of lucky dr
 
 **Assumptions:**
 - max_correlator_size M = N, the strictest choice. The CSVs also record M = 4.
+
+**Revised aggregate (organizer email, Sun Oct 25, 04:01 ET).** The preliminary ranking now
+averages 1/score over trials and reports 1/avg(1/score), i.e. **1 / E[z + x]**, because the
+plain mean "approaches infinity in the absence of noise". That removes the heavy tail: with
+E[χ²] = K − 1 + λ,
+
+    1 / E[z + x] ≈ 1 / ( (K − 1 + λ) / (K f) + x )  ≈  1 / (1/f + λ/(K f) + x)  for large K.
+
+So for the tested pairs (D¹⁰₃, D¹⁰₅, D¹⁵₄; K = 120, 252, 1365) the score is set by the
+right-weight fraction f (total gate error) and the X term x; population imbalance only matters
+through λ/K, i.e. for small K. Every CSV already carries this quantity as `loss_mean_*`
+(= E[z + x]); the tables in section 4 marked "hm" report 1/E[z + x]. The organizer may change
+the (N, n) pairs again, so both views are kept.
 - The calibrations are the notebook's fake-data generators with seeds 0, 1, 2.
 
 ## 2. Architecture (`main.py`)
@@ -84,6 +97,28 @@ clashes) and dispatches by that measured rule. The bonus entry picks the shallow
 candidates, his among them (section 5). His derivations of every building block (known-target rotations,
 the 2-CZ transfer bound, the 5-CZ G₃, the merged 4-CZ top block) are in
 `docs/bryan_constructions.md`.
+
+**Single-qubit merge pass (`_merge_single_qubit_runs`, Oct 25).** Every circuit `build`
+returns goes through one exact pass: each run of single-qubit gates on a qubit between its
+two-qubit gates is folded into one PhasedXZ (dropped if it is the identity up to phase), kept at
+the moment index of the run's last gate, then empty moments are dropped and our sparse XY4
+`_add_dd` runs on the result. Nothing moves earlier, so no qubit leaves |0⟩ sooner; moments can
+only fall. The vendored constructions echoed every idle single-qubit slot with a π pulse
+(CPMG), which was 60% of their single-qubit gates at N ≥ 9: D¹⁵₄ 777 → 276 before DD (424 with
+XY4 on long windows), D¹⁰₅ 371 → 230, D⁹₄ 286 → 170. In the calibrations the single-qubit error
+budget of those circuits was as large as the CZ budget (D¹⁵₄: Σ 0.33 vs 0.27), so under
+per-gate noise the pulses only cost. Measured effect, section 4 ("hm" table): +1–11% at N ≥ 9
+under gate noise, +0–21% under idle noise, +0–1% at N ≤ 8.
+
+**Circuits adopted from the teammates' Bridges-2 synthesis (Tanish/Aanha, `origin/main`
+`DuQuantum_submission_FINAL.ipynb`, `_PSC` table; imported as
+`results/synth/D*_psc_s*.json`).** The same Ry + CZ ansatz as `synth.py`, run with more seeds.
+Hardware table: D⁷₃ 18 CZ (was 25; +3.3% gate / +3.7% idle), D⁸₃ 30 CZ L-shape (was 31;
++0.7% / +2.3%), D⁸₄ 26 CZ (was 29; +0.6% / +1.3%), all on 3 calibrations (`psc_hw*.csv`).
+Not adopted: D⁵₂ 9 CZ (+0.8%, loses the robust angle pick for K = 10), D⁶₃ 14 CZ (−3% idle);
+D⁶₂/D⁷₂/D⁸₂ go to Bryan's path, so their table entries do not matter for hardware. Bonus
+table (`_BONUS_SYNTH`, now ranked by packed moments): D⁷₂ 17, D⁸₂ 21, D⁸₃ 27, D⁸₄ 23, D⁹₂ 23,
+D⁹₃ 31, D⁹₄ 41, D¹⁰₂ 26.
 
 - **W tree (k = 1).**
   - Amplitude starts on a root. Each round, every qubit holding amplitude hands its
@@ -227,6 +262,32 @@ The current submission wins k = 2 at N ≥ 6 (up to +16% at D¹⁰₂, from 31 v
 N = 9–10 (+4–5%) and N ≤ 3. The preliminary one wins D¹⁰₅ (−5%), D⁹₄ (−4%) and W₉/W₁₀
 (−0.5/−1.5%); see section 6 for why.
 
+**Under the organizer's revised aggregate ("hm" = 1/E[z + x], section 1; 3 calibrations,
+`newmetric_*.csv`, `merge_small_*.csv`, `psc_hw*.csv`, `bign/traj_N15_n4_*.csv`).** The
+organizer's preliminary table had the preliminary combined submission (Aanha's builder at
+N ≥ 9) ahead of ours on D¹⁰₅ (0.433 vs 0.358) and D¹⁵₄ (0.509 vs 0.398) and behind on D¹⁰₃
+(0.390 vs 0.486). Our harness reproduces the signs but not the size; the per-gate error budgets
+pointed at the dense π pulses, and removing them (merge pass) puts the deployed circuits ahead
+on every case under both noise presets:
+
+| case | deployed before (gate / idle) | **now** (gate / idle) | preliminary combined (gate / idle) |
+|---|---|---|---|
+| D⁷₃ | 0.904 / 0.841 | **0.934 / 0.872** | 0.904 / 0.840 |
+| D⁸₃ | 0.872 / 0.787 | **0.878 / 0.805** | 0.833 / 0.739 |
+| D⁸₄ | 0.862 / 0.789 | **0.867 / 0.799** | 0.859 / 0.784 |
+| D⁹₃ | 0.790 / 0.661 | **0.806 / 0.669** | 0.761 / 0.619 |
+| D⁹₄ | 0.692 / 0.536 | **0.724 / 0.536** | 0.691 / 0.521 |
+| D¹⁰₂ | 0.882 / 0.822 | **0.889 / 0.827** | 0.818 / 0.708 |
+| D¹⁰₃ | 0.765 / 0.639 | **0.776 / 0.639** | 0.722 / 0.582 |
+| D¹⁰₄ | 0.651 / 0.501 | **0.681 / 0.511** | 0.621 / 0.463 |
+| D¹⁰₅ | 0.569 / 0.421 | **0.603 / 0.421** | 0.582 / 0.413 |
+| D¹⁵₄ (trajectories, seed 0) | 0.491 / 0.318 | **0.546 / 0.351** | 0.447 / 0.310 |
+
+Dropping DD entirely ("lean", `newmetric_N6_10_*.csv`) is another +1–5% in simulation
+(D¹⁰₅ gate 0.631, D¹⁵₄ idle 0.384), but the notebook says the final run is on hardware where
+dynamical decoupling matters, so the sparse XY4 on long windows stays. The Markovian presets
+cannot show a DD gain; the quasi-static `full` preset was too slow at N = 9–10 to finish.
+
 **Totals over these 25 cases (our constructions only):**
 
 | | baseline | now | perfect state |
@@ -253,7 +314,10 @@ N = 9–10 (+4–5%) and N ≤ 3. The preliminary one wins D¹⁰₅ (−5%), D�
 `results/bonus_variants.csv`). The organizers' first feedback (Sat night) put our bonus at 37.15
 against a leader at 41.10. All 56 cases were present and exact, so the gap was depth. The entry
 now builds every exact candidate below, checks nothing else, and returns the shallowest after
-`_pack` (mixed 1q/CZ moments). `score_solution` over 2 ≤ N ≤ 15: **43.79** (was 37.15; the leader's first-round number was 41.10).
+`_pack` (mixed 1q/CZ moments). `score_solution` over 2 ≤ N ≤ 15: **44.47** (37.15 at the first
+feedback, 43.79 before the teammates' Bridges-2 circuits were merged in; the leader's
+first-round number was 41.10; the teammates' own bonus entry measures 41.47 with the same
+scorer, section 6).
 
 - *Unitary on purpose.* `cirq_google.Willow105.validate_circuit` rejects classically
   controlled operations (`X.with_classical_controls(m)`: "gate which is not supported");
@@ -269,8 +333,10 @@ now builds every exact candidate below, checks nothing else, and returns the sha
   (`_TAIL`, `experiments/tail_synth.py`); m0 equal to the arm length makes the whole arm one
   block, which is what wins for k = 2 (U₇ r≤2, 27 moments, vs a 37-moment sweep arm) and
   k ≤ 4 at N ≤ 12 (U₆ r≤4, 43 vs 97); (5) whole-state synthesized circuits ranked by layer
-  count rather than CZ count (`_BONUS_SYNTH`, `synth.py --bonus-export`): D⁵₂ 13 (was 15),
-  D⁶₃ 15 (17), D⁷₃ 21 (23), D⁸₄ 24 (25), D⁹₂ 25 (28), D⁹₄ 59 (70).
+  count rather than CZ count (`_BONUS_SYNTH`, `synth.py --bonus-export`, since Oct 25 ranked by
+  moments after `_pack`): D⁵₂ 13 (was 15), D⁶₃ 15 (17), D⁷₃ 21 (23), D⁸₄ 24 (25), D⁹₂ 25 (28),
+  D⁹₄ 59 (70); with the teammates' Bridges-2 circuits (section 2) D⁷₂ 17, D⁸₂ 21, D⁸₃ 27,
+  D⁸₄ 23, D⁹₂ 23, D⁹₃ 31, D⁹₄ 41, D¹⁰₂ 26.
 - *Where the depth was.* A split circuit is 2·(CZ depth)+1 moments with the CZ depth set by
   the B-E sweep: D¹⁵₇ was 160 moments, 147 of them the 8-qubit arm alone; each arm position
   costs ~18 moments at k ≥ 5 (10 at k = 3, 5 at k = 2), and the last four positions are a
@@ -288,9 +354,9 @@ now builds every exact candidate below, checks nothing else, and returns the sha
   | n | moments for N = n·2 … 15 |
   |---|---|
   | 1 | 3, 6, 7, 9, 10, 10, 11, 12, 13, 13, 13, 14, 14, 14 (N = 2…15) |
-  | 2 | 7, 13, 16, 21, 22, 25, 27, 31, 31, 31, 31, 35 (N = 4…15) |
-  | 3 | 15, 21, 29, 36, 37, 45, 45, 48, 49, 62 (N = 6…15) |
-  | 4 | 24, 50, 51, 51, 51, 62, 63, 84 (N = 8…15) |
+  | 2 | 7, 13, 16, 17, 21, 23, 26, 31, 31, 31, 31, 35 (N = 4…15) |
+  | 3 | 15, 21, 27, 31, 37, 45, 45, 48, 49, 62 (N = 6…15) |
+  | 4 | 23, 41, 51, 51, 51, 62, 63, 84 (N = 8…15) |
   | 5 | 73, 88, 94, 106, 112, 124 (N = 10…15) |
   | 6 | 103, 116, 124, 134 (N = 12…15) |
   | 7 | 133, 144 (N = 14, 15) |
@@ -360,6 +426,13 @@ ahead by 3–13% except at N = 12 (tie). Two reasons:
   its D10,5 circuit (seed 0) costs 0.410 → 0.394 (`bign/mixed_probe.csv`, `experiments/mixed_moments.py`),
   so about half its edge there is this timing assumption. **Open question:** do mixed CZ + 1q
   moments behave on Willow as the model assumes? `_to_cz_phxz` deliberately stratifies.
+
+**Teammates' final bonus entry** (`origin/main` `DuQuantum_submission_FINAL.ipynb`, cell 15; measured
+with the notebook's `score_solution` semantics, all 56 cases exact, routed, whitelisted): **41.47**.
+It wins D⁷₂ (19 vs our 21), D⁸₃ (27 vs 29), D⁹₂ (23 vs 25), D⁹₃ (31 vs 36), D⁹₄ (41 vs 50) and
+D¹²₆ (102 vs 103) and loses every k ≥ 3 case at N ≥ 10 (D¹⁵₃ 74 vs 62, D¹⁴₄ 78 vs 63). Its wins
+are whole-state circuits from the Bridges-2 synthesis runs; those are now candidates in our entry
+(section 2), which takes the per-case minimum: 44.47.
 
 **What did not work:**
 - **Whole-state re-synthesis at N = 9–10** (`synth.py`, overnight, 24 workers, stopped): best

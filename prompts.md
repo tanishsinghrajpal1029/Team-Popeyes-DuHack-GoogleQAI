@@ -510,3 +510,33 @@ same runs were evaluated for the hardware track on three calibrations and not de
 measured better; ARCHITECTURE.md section 6). Searches that did not land: U₅ r≤5, U₆ r≤5,
 U₈ r≤3, ladder-shaped blocks, randomized W-tree matchings. A seed collision overwrote two
 synthesis result files; they were restored from git.)
+
+### Prompt 51 (Sun Oct 25, ~06:40 ET)
+
+> (Pasted organizer email, 04:01 ET: scoring was numerically unstable, now averages 1/score and
+> reports 1/avg(1/score); (N, n) pairs and max_correlator_size changed; new tables: overall
+> ranking, per-pair breakdown for (10,3), (10,5), (15,4), Problem-1-only ranking.)
+
+(Work: derived what the revised aggregate changes (1/E[z + x]: f and x decide, imbalance only via
+λ/K); compared our deployed circuits with the preliminary combined submission per gate-error
+budget, which showed 60% of our single-qubit gates at N ≥ 9 were the vendored CPMG pulses; added
+the exact `_merge_single_qubit_runs` pass before our sparse XY4 DD; measured it against the
+deployed circuits and the teammates' builder on 3 calibrations under gate and idle noise
+(density matrices to N = 10, trajectories for D¹⁵₄); regenerated the golden file for the 13
+small-N cases whose single-qubit gates merged (all measured equal or better).)
+
+### Prompt 52
+
+> tanish's branch got 44.47. should we just adopt his
+
+> rather tanishs new code is in main
+
+(Work: `origin/tanish` holds only the stock notebook; the entry is in `origin/main`
+`DuQuantum_submission_FINAL.ipynb`. Measured it with the notebook's `score_solution` on all 56
+cases: 41.47 (exact, routed, whitelisted), winning six cases with whole-state circuits from the
+teammates' Bridges-2 synthesis runs (`_PSC` table). Imported those circuits as
+`results/synth/D*_psc_s*.json`, made `synth.py --bonus-export` rank by moments after `_pack`,
+re-exported `_BONUS_SYNTH`: bonus **44.47**. Adopted three of them for the hardware table
+(D⁷₃ 18 CZ, D⁸₃ 30, D⁸₄ 26) after measuring on 3 calibrations; kept ours where the fewer-CZ
+circuit measured worse or lost a robust angle pick. Regenerated and benchmarked
+`submission.ipynb`, updated ARCHITECTURE/README/CLAUDE/writeup, committed and pushed `richard`.)

@@ -15,13 +15,18 @@ fewer CZ:
 |---|---|---|
 | k = 0 | product state (nothing, or X on all) | 0 |
 | k = 1 | broadcast tree of amplitude splits (first split 1 CZ, then 2-CZ Givens) | 2N − 3 |
-| N ≤ 8, k ≥ 2 (k = 2 at N ≥ 6 goes to Bryan's) | whole-state exact Ry + CZ circuit, synthesized offline, placed at build time | D⁴₂ 5, D⁶₃ 15, D⁷₃ 25, D⁸₄ 27 |
+| N ≤ 8, k ≥ 2 (k = 2 at N ≥ 6 goes to Bryan's) | whole-state exact Ry + CZ circuit, synthesized offline (ours, plus three of the teammates' Bridges-2 circuits), placed at build time | D⁴₂ 5, D⁶₃ 15, D⁷₃ 18, D⁸₃ 30, D⁸₄ 26 |
 | k ≤ 5, any N | Bärtschi–Eidenbenz built from synthesized nearest-neighbour SCS blocks on a path (no routing) | ≈ 4N (k=2); 12, 17, 29 per block (k=3, 4, 5) |
 | k = 2 with N ≥ 6, or k ≥ 3 with N ≥ 9 | Bryan's solution (vendored from `origin/bryan`; derivations in `docs/bryan_constructions.md`): B-E with custom blocks and a two-arm "split" B-E | D⁸₂ 23, D¹⁰₅ 85 |
 | everything else (fallback) | Bärtschi–Eidenbenz, routed on a low-error path with `cirq.RouteCQC` | O(nN) + routing |
 
-Dynamical decoupling (XY4) is added to idle windows with at least 4 free single-qubit
-slots on qubits that may be in superposition.
+Every returned circuit then goes through an exact single-qubit merge (runs of single-qubit
+gates between CZs become one PhasedXZ; the vendored circuits' dense CPMG pulses disappear, D¹⁵₄
+777 → 276 single-qubit gates), and dynamical decoupling (XY4) is added to idle windows with at
+least 4 free single-qubit slots on qubits that may be in superposition.
+
+The organizer's revised preliminary scoring (Oct 25) averages 1/score, i.e. reports 1/E[z + x];
+ARCHITECTURE.md section 1 derives what that changes and section 4 has the head-to-head under it.
 
 For n > N/2 we prepare D^N_{N−n} and flip every qubit. The Dicke state is
 permutation-symmetric, so routing permutations never need undoing; we return wherever the
@@ -44,7 +49,7 @@ spread between qubits.
 ```bash
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python --prerelease=allow -r requirements.txt  # Willow105 needs cirq 1.8 dev
-.venv/bin/python -m pytest tests/ -q                     # 388 tests: exactness + rules, N <= 10, golden N <= 8 (~70 s)
+.venv/bin/python -m pytest tests/ -q                     # 419 tests: exactness + rules, N <= 10, golden N <= 8 (~70 s)
 
 # simulated scores (exact density matrix + 20k simulated 10k-shot runs), one CSV row per case
 .venv/bin/python experiments/evaluate.py --out mine.csv --nmin 2 --nmax 8 --noise idle --repeats 20000
@@ -70,6 +75,8 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1   # parallel jobs: one BLAS thre
 .venv/bin/python experiments/figures.py
 
 # bonus track (depth only): tail blocks, depth-ranked whole-state picks, per-case candidate table
+# (synth.py --bonus-export ranks results/synth/*.json by moments after main._pack; the D*_psc_s*.json files
+#  there are the teammates' Bridges-2 circuits, imported from origin/main DuQuantum_submission_FINAL.ipynb)
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python experiments/tail_synth.py --cases 3,3 4,3 4,4 5,3 5,4 6,3 --seeds 0 1 2 3 --workers 24
 .venv/bin/python experiments/tail_synth.py --export          # -> _TAIL in main.py
 .venv/bin/python experiments/synth.py --bonus-export          # -> _BONUS_SYNTH (fewest layers, N <= 10)
