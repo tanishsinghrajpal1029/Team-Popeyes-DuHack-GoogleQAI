@@ -435,3 +435,50 @@ and mean 100.8. Bonus: the notebook's `score_solution`, with a `validate_circuit
 the bonus text (the notebook never defines one), gave 37.1542 over 56 cases. All were exact and
 routed, with no measurements, and the slowest build took 7.7 s. Results are in
 `notebook_standard.csv`, `notebook_standard_totals.csv` and `notebook_bonus.csv`.)
+
+## Session 5 — Sat Oct 24, 2026, ~10:10 PM EDT (Sun 02:10 UTC)
+
+### Prompt 44 (plan mode; model: Claude Fable 5.1)
+
+> /plan Your solution is tied for 3rd place out of the five submissions I have received so far.
+> For the bonus question, your score is 37.1542. The highest score for the bonus question among
+> the solutions I have received is 41.1036.
+
+(The organizer's message, pasted as the planning brief. The assistant reproduced 37.1542 from
+`notebook_bonus.csv`, then measured, read-only: `Willow105.validate_circuit` rejects classically
+controlled gates (measurement alone passes); Givens-only, 2D-patch and complex-layer brickwork
+synthesis all stall at N ≈ 8; the deployed split circuits are 2·(CZ depth)+1 moments with a
+strictly serial 41-moment arm tail; depth-minimal replacements for that tail save 8–10 moments.
+It asked how to spend the time given a realistic +1 to +1.5 points.)
+
+### Prompt 45 (mid-plan question)
+
+> is the gap just an accuracy gap on the n <= 8 cases or is it one where we are missing actual
+> cases where 8 <= n <= 15
+
+(Answer: no missing cases; all 56 are present and exact. 12.1 points come from N ≤ 8, 25.0 from
+N ≥ 9; the W states are at the Givens-tree floor, so the leader's edge is in k ≥ 2 depth.)
+
+Clarifying question from the assistant, and Richard's answer:
+
+- *Time-boxed micro-wins (~2.5 h, then deliverables) / deliverables only / all-in on the bonus?*
+  → "Time-boxed micro-wins (Recommended)". Plan approved.
+
+### Prompt 46 (during execution)
+
+> did we also incorporate tanish branch optimal stuff
+
+(The assistant ran the preliminary combined submission (commit 1995558) and the `origin/Aanha`
+branch on all 56 bonus cases: 33.7 and 32.4 in total, but shallower than ours on W₅–W₁₅ by 1–2
+moments and on D¹⁰₅/D¹²₆/D¹⁴₇ by 3–5. It ported Aanha's broadcast W tree into the bonus
+candidate set with attribution; the half-filling cases were already beaten by the new split
+variants. Outcome of the session: `score_solution` 37.15 → 40.59, all cases exact, routed and
+whitelisted, hardware path unchanged (golden test passes). Details: ARCHITECTURE.md section 5.)
+
+### Prompt 47 (new session after a restart)
+
+> can u push the current and continue
+
+(The assistant exported the finished tail blocks (U₄ r≤4 29 moments, U₆ r≤4 43), re-ran the
+bonus benchmark (40.59), regenerated and executed `submission.ipynb`, re-benchmarked it with the
+notebook's `score_solution`, updated ARCHITECTURE.md, and committed and pushed branch `richard`.)

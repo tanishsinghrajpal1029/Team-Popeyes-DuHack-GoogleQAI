@@ -69,6 +69,12 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1   # parallel jobs: one BLAS thre
 # slide figures (score_tail, ceiling_fraction*, cz_counts*, tree_vs_chain)
 .venv/bin/python experiments/figures.py
 
+# bonus track (depth only): tail blocks, depth-ranked whole-state picks, per-case candidate table
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python experiments/tail_synth.py --cases 3,3 4,3 4,4 5,3 5,4 6,3 --seeds 0 1 2 3 --workers 24
+.venv/bin/python experiments/tail_synth.py --export          # -> _TAIL in main.py
+.venv/bin/python experiments/synth.py --bonus-export          # -> _BONUS_SYNTH (fewest layers, N <= 10)
+OMP_NUM_THREADS=1 .venv/bin/python experiments/bonus_depth.py --workers 28   # bonus_variants.csv + score_solution total
+
 # rebuild submission.ipynb from main.py and execute it
 .venv/bin/python experiments/make_notebook.py --run
 # score submission.ipynb with its own functions: overall_score (standard) and score_solution (bonus)
