@@ -210,7 +210,7 @@ with no over-rotation, on held-out calibrations, so the rows were not re-simulat
 **Portfolio (current `main.py`, `portfolio.csv`).** Σ E[score] **102.0** and Σ median **27.9**,
 vs 101.0 / 26.9 for our constructions alone and 100.5 / 27.2 for Bryan's alone. The per-case
 rows above are our constructions; for k = 2 with N ≥ 6 and k ≥ 3 with N ≥ 9 the deployed numbers
-are Bryan's (`vs_bryan.csv`). Bonus: 42.72 (`bonus_variants.csv`; section 5), up from 37.15
+are Bryan's (`vs_bryan.csv`). Bonus: 42.93 (`bonus_variants.csv`; section 5), up from 37.15
 when the entry only chose between ours (23.8) and Bryan's (35.3).
 
 **Against the preliminary combined submission** (`prelim_vs_latest.csv`; teammates'
@@ -221,7 +221,7 @@ Aanha's builder for N ≥ 9; same harness, 3 calibrations):
 |---|---|---|
 | Σ median (25 cases, N ≤ 10) | 27.53 | **27.99** |
 | Σ E[score] | 90.77 | **102.88** |
-| bonus `score_solution` | 33.67 | **42.72** |
+| bonus `score_solution` | 33.67 | **42.93** |
 
 The current submission wins k = 2 at N ≥ 6 (up to +16% at D¹⁰₂, from 31 vs 49 CZ), k = 3–4 at
 N = 9–10 (+4–5%) and N ≤ 3. The preliminary one wins D¹⁰₅ (−5%), D⁹₄ (−4%) and W₉/W₁₀
@@ -253,7 +253,7 @@ N = 9–10 (+4–5%) and N ≤ 3. The preliminary one wins D¹⁰₅ (−5%), D�
 `results/bonus_variants.csv`). The organizers' first feedback (Sat night) put our bonus at 37.15
 against a leader at 41.10. All 56 cases were present and exact, so the gap was depth. The entry
 now builds every exact candidate below, checks nothing else, and returns the shallowest after
-`_pack` (mixed 1q/CZ moments). `score_solution` over 2 ≤ N ≤ 15: **42.72** (was 37.15; the leader's first-round number was 41.10).
+`_pack` (mixed 1q/CZ moments). `score_solution` over 2 ≤ N ≤ 15: **42.93** (was 37.15; the leader's first-round number was 41.10).
 
 - *Unitary on purpose.* `cirq_google.Willow105.validate_circuit` rejects classically
   controlled operations (`X.with_classical_controls(m)`: "gate which is not supported");
@@ -269,8 +269,8 @@ now builds every exact candidate below, checks nothing else, and returns the sha
   (`_TAIL`, `experiments/tail_synth.py`); m0 equal to the arm length makes the whole arm one
   block, which is what wins for k = 2 (U₇ r≤2, 27 moments, vs a 37-moment sweep arm) and
   k ≤ 4 at N ≤ 12 (U₆ r≤4, 43 vs 97); (5) whole-state synthesized circuits ranked by layer
-  count rather than CZ count (`_BONUS_SYNTH`, `synth.py --bonus-export`): D⁶₃ 15 (was 17),
-  D⁸₄ 24 (25), D⁹₂ 25 (28), D⁹₄ 59 (70).
+  count rather than CZ count (`_BONUS_SYNTH`, `synth.py --bonus-export`): D⁵₂ 13 (was 15),
+  D⁶₃ 15 (17), D⁷₃ 21 (23), D⁸₄ 24 (25), D⁹₂ 25 (28), D⁹₄ 59 (70).
 - *Where the depth was.* A split circuit is 2·(CZ depth)+1 moments with the CZ depth set by
   the B-E sweep: D¹⁵₇ was 160 moments, 147 of them the 8-qubit arm alone; each arm position
   costs ~18 moments at k ≥ 5 (10 at k = 3, 5 at k = 2), and the last four positions are a
@@ -278,7 +278,7 @@ now builds every exact candidate below, checks nothing else, and returns the sha
   U_{m0}: |0^{m0−r}1^r⟩ → |D^{m0}_r⟩, r ≤ min(k, m0), an isometry we synthesize exactly with
   `scs_synth.BatchCircuit` (fewest layers first): U₃ r≤3 17 moments (sweep 19), U₄ r≤3 23 (35),
   U₄ r≤4 29 (41), U₅ r≤3 31 (49), U₅ r≤4 43 (69), U₆ r≤2 27, U₆ r≤3 39 (63), U₆ r≤4 43 (81),
-  U₇ r≤2 27; U₅ r≤5 and U₆ r≤5 were not found exact within 25 min on 13 seeds. The layer count found varies
+  U₇ r≤2 27, U₇ r≤3 43 (77), U₈ r≤2 31; U₅ r≤5 and U₆ r≤5 were not found exact within 25 min on 13 seeds. The layer count found varies
   2–6 between seeds (U₄ r≤4: 14–21 layers over 12 seeds), so every block got 8–13 seeds.
   Effect: D⁹₃ 54 → 36, D¹¹₄ 88 → 51, D¹²₄ 88 → 51, D¹³₂/D¹⁴₂ 40 → 31, D¹⁵₂ 46 → 36,
   D¹⁴₄ 106 → 78, D¹⁵₃ 96 → 74, D¹⁵₄ 124 → 92, D¹⁵₇ 160 → 144. The thermometer order never changed a winner (bottom-up always won); putting
@@ -368,6 +368,12 @@ ahead by 3–13% except at N = 12 (tie). Two reasons:
   replace; at N ≤ 15 the constants eat the asymptotic gain.
 - Top-down thermometer (arm's own first sweep can start after two bits): exact, never shallower
   than bottom-up with the thermometer on the non-critical arm.
+- **Re-synthesis of N ≤ 8 with 8 more seeds per shape** (`results/synth/smallN_seeds.log`) found
+  fewer CZs for D⁵₂ (9 vs 10), D⁶₃ (14 vs 15) and D⁷₃ (22 vs 25), but on three calibrations
+  (`synth_reseed.csv` vs `portfolio.csv`) none measures better: D⁶₃ is worse (median 0.91–0.95
+  vs 0.96, λ 0.8–1.0 vs 0.25), D⁵₂ and D⁷₃ are ties within sampling noise while losing their
+  robust angle picks. The hardware table was left as deployed; the same runs did shave bonus
+  moments (D⁵₂ 15 → 13, D⁷₃ 23 → 21, via `_BONUS_SYNTH`).
 
 ## 7. Maintenance notes
 
