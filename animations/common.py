@@ -10,7 +10,7 @@ import math
 import os
 
 from manim import (
-    BLUE, DOWN, GREEN, GREY_B, GREY_D, LEFT, RED, RIGHT, UL, UP, WHITE, YELLOW,
+    BLUE, DOWN, GREEN, GREY_B, GREY_D, RED, RIGHT, UL, WHITE, YELLOW,
     Circle, Dot, Line, Rectangle, Scene, TexTemplate, Text, VGroup, config, interpolate_color,
 )
 

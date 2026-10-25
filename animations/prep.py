@@ -332,7 +332,6 @@ def coherent():
 def merge(cal):
     """Bryan's D^15_4 before the merge pass, after it, and after sparse XY4: gate counts, error
     budgets and the per-moment timeline of the qubits with the most single-qubit gates."""
-    import cirq
     sq_e = {q: v[0] for q, v in cal["sq_pauli_error_rate"].items()}
     cz_e = {frozenset(p): v[0] for p, v in cal["cz_pauli_error_rate"].items()}
     raw, _ = main._bryan_create_dicke_state(15, 4, **cal)

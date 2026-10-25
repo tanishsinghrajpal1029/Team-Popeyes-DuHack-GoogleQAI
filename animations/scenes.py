@@ -20,7 +20,7 @@ from manim import (
     DOWN, LEFT, RIGHT, UP, WHITE, Arrow, Axes, Brace, Circle, Create, Cross, DashedLine,
     FadeIn, FadeOut, Flash, GrowFromEdge, Indicate, LaggedStart, Line, MathTex, Polygon,
     Rectangle, ReplacementTransform, Square, Succession, Swap, Text, Transform,
-    ValueTracker, VGroup, Wait, Write, always_redraw, AnimationGroup, Circumscribe, Dot,
+    ValueTracker, VGroup, Write, always_redraw, AnimationGroup, Circumscribe, Dot,
     SurroundingRectangle, interpolate_color, rate_functions,
 )
 

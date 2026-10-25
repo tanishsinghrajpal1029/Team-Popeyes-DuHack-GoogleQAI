@@ -843,3 +843,15 @@ frame by frame for overflow and overlaps.)
 (The assistant committed the writeup, animation and result-CSV changes on `bryan`, leaving out
 local scratch files from video editing (`figures/anim/COPY_1_*.mp4`, `mpv-shot0001.jpg`,
 `output.gif`), pushed, and merged `bryan` into `main`.)
+
+### Prompt 70 (model: Claude Opus 5.5)
+
+> cleanup codebase
+
+(With the 11:30 deadline 25 minutes away, the assistant limited the cleanup to changes that cannot
+alter a submitted circuit: `main.py` and `submission.ipynb` are untouched. It removed six unused
+imports and one unused variable that `ruff --select F` flagged in `experiments/` and `animations/`
+(`main.py` and `tests/` were already clean), and renamed `ask_the_circuit (1).py` to
+`ask_the_circuit.py`, the name its own docstring uses. It left alone a concurrent README edit, the
+untracked slide deck and `md_latex`, the root `math.tex`/`math.pdf` (an older copy of
+`docs/main.tex`/`docs/main.pdf`), and the teammates' notebooks, which ARCHITECTURE.md cites by path.)

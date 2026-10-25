@@ -35,7 +35,7 @@ sys.path[:0] = [os.path.dirname(HERE), HERE]
 
 import main  # noqa: E402
 from calib import BENCH_SEEDS  # noqa: E402
-from evaluate import H_PHXZ, NOISE_PRESETS, append_rows, evaluate_case, git_rev  # noqa: E402
+from evaluate import H_PHXZ, append_rows, evaluate_case, git_rev  # noqa: E402
 from noise import CalibratedNoise, apply_readout  # noqa: E402
 from scoring import popcounts  # noqa: E402
 

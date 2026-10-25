@@ -233,7 +233,6 @@ def compress(N: int, k: int, seed: int = 0, log=print, save=None, budget_s: floa
 
     if save:
         save(result())
-    tried = set()  # (layer signature, edge) pairs that failed for the current structure
     improved = True
     while improved and time.time() - t0 < budget_s:
         improved = False

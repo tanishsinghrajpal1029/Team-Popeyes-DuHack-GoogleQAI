@@ -18,7 +18,6 @@ Results: experiments/results/tail/U<m0>_r<rmax>_<shape>_s<seed>.json
 import argparse
 import itertools
 import json
-import math
 import os
 import sys
 import time
