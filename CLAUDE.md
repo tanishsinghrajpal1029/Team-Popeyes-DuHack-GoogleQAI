@@ -139,8 +139,12 @@ reward "shallow for large N·n". Must produce the exact state on every measureme
 branch (no post-selection). Willow readout-line rule: measuring any qubit on an
 anti-diagonal (row + col = const) requires measuring all qubits on it — data qubits
 and measured ancillas must sit on disjoint anti-diagonals (not checked by
-`validate_circuit`). Idea: prepare Dicke states on blocks in parallel, fuse via
-ancilla measurements + corrections. Expect log-ish depth, not constant.
+`validate_circuit`). **Decided (Oct 25): the entry is unitary.**
+`Willow105.validate_circuit` rejects classically controlled operations (measurement alone
+passes), and for N ≤ 15 every measurement-based scheme costed deeper than the unitary
+constructions. The entry picks the shallowest of several exact candidates
+(`bonus_candidates` in main.py; ARCHITECTURE.md §5). Organizer feedback on the first
+submission: 37.15 (ours) vs 41.10 (leader) on `score_solution`.
 
 ## Known issues in the provided notebook
 
