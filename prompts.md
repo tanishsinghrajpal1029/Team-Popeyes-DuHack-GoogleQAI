@@ -616,6 +616,20 @@ effects.)
 corrupt it. Every number was taken from ARCHITECTURE.md, `math.tex` or
 `notebook_standard_totals.csv`, and commit times were converted to ET.)
 
+### Prompt 61
+
+> i've committed. can you check the figure paths? they dont seem to fetch and 404 instead
+
+(The assistant found every linked file on `origin/main` and traced the 404s to the repository
+being private; the remedy is to make the repository public or upload the images to Devpost.)
+
+### Prompt 62
+
+> remove that thanks
+
+(The assistant removed the committed `md_latex` (the Devpost Markdown/LaTeX help page) from the
+repository, keeping the local copy.)
+
 ---
 
 ## Teammate log — PSC Bridges-2 circuit search
