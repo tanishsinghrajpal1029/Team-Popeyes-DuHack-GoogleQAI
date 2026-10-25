@@ -221,6 +221,8 @@ create_dicke_state(N, n, calibration)
 - **Cost.** The first transfer costs 1 CZ, and each later one is a 2-CZ rotation within the span of |01⟩ and |10⟩. One CZ cannot do a later transfer: it would have to leave |00⟩ unentangled but entangle |10⟩, and that is impossible. The total is 2N − 3 CZ, the same as a chain, but W₁₀ takes 15 moments instead of 37.
 - **Balance.** Every branch carries one excitation throughout, so decay creates no imbalance.
 
+![Animation: a W state spread along a tree versus a line, then W₁₀ built both ways on Willow](figures/anim/WTree.gif)
+
 ![X term of W states under gate and idle noise, tree vs chain](figures/tree_vs_chain.png)
 
 **Exact synthesis (N ≤ 8).**
@@ -229,6 +231,8 @@ create_dicke_state(N, n, calibration)
 - **Search.** L-BFGS with exact gradients drives the infidelity $1 - \langle D^N_n \mid \psi(\theta) \rangle^2$ below 10⁻¹³. Greedy deletion then removes every CZ the circuit can do without while staying exact.
 - **Results.** D⁴₂ 5 CZ, D⁵₂ 10, D⁶₃ 15, D⁷₃ 18, D⁸₃ 30, D⁸₄ 26, against 21–162 for routed B-E. The last three came from longer runs on PSC Bridges-2.
 - **Robust angles.** One CZ pattern admits many exact angle sets. Over-rotation shifts probabilities at first order but a stray phase only at second order, so we deploy the set least sensitive to over-rotation (1.1–5.5× less).
+
+![Animation: brickwork search for an exact D⁴₂ circuit, pruning from 6 to 5 CZ, and CZ counts against routed B-E](figures/anim/Synthesis.gif)
 
 **Bärtschi–Eidenbenz (any N).** B-E turns this identity into a sequence of "split and cyclic shift" blocks:
 
@@ -258,11 +262,15 @@ $$
 - λ_ro is the imbalance caused by qubits that misread at different rates.
 - Every rate enters as value + 1σ, so we don't favour qubits that only look good by chance.
 
+![Animation: Willow coloured by CZ error, beam search for a 6-qubit path, readout matching, and the W₂ pair scan](figures/anim/Placement.gif)
+
 **Compilation.**
 
 - **Moments.** Every moment is all-CZ or all-single-qubit.
 - **Merge pass.** An exact pass folds each run of single-qubit gates into one `PhasedXZ`; D¹⁵₄ goes from 777 to 276 single-qubit gates.
 - **Echoes.** We add XYXY echoes (product −I, so the noiseless state is unchanged) only in idle windows of 4 or more slots. Dropping them scores 1–5% better in simulation, but our memoryless dephasing model cannot show the slow drift they fix on hardware, so they stay.
+
+![Animation: D¹⁵₄ timelines before and after the single-qubit merge pass, the error budget, then sparse XY4](figures/anim/MergePass.gif)
 
 **Bonus entry (depth only).** The bonus is scored by Σ N·n / moments over the 56 cases with 2 ≤ N ≤ 15 and 1 ≤ n ≤ ⌊N/2⌋.
 
@@ -342,7 +350,7 @@ Our simulator does not reproduce the *size* of the gaps on the organizers' preli
 
 - Use hardware data on over-rotation and T₂* to settle the decoupling trade-off.
 - Check whether mixed CZ + single-qubit moments behave as the model assumes.
-- Find exact blocks for the k ≥ 5 bonus arms (12 cases, 8.5 points).
+- Find exact blocks for the k ≥ 5 bonus arms (12 cases, 8.0 points).
 - Add per-qubit T₁ to placement.
 
 ---
@@ -428,8 +436,7 @@ animations/render.sh                         # all scenes; or e.g. animations/re
 | `MergePass` | D¹⁵₄ timelines with dense CPMG pulses folded into one PhasedXZ per run (777 → 276), Σe before/after, then sparse XY4 |
 | `BonusDepth` | the depth score, where D¹⁵₇'s moments go (147 of 160 in one arm), the U_{m₀} isometry with 3 of 128 columns fixed, 37.15 → 44.47 |
 
-![ScoreTail](figures/anim/ScoreTail.gif)
-![WTree](figures/anim/WTree.gif)
+`WTree`, `Synthesis`, `Placement` and `MergePass` are also embedded above, next to the sections they illustrate.
 
 **Repository layout:**
 
