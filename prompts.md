@@ -319,3 +319,49 @@ stub cells from `main.py` (the adaptive function into the bonus cell, everything
 standard-track cell) and appends a check cell running the notebook's `test_circuit` and
 `Willow105.validate_circuit` on a few cases. Output: `submission.ipynb`; `--run` executes it
 top to bottom.)
+
+### Prompt(s) for commit `ce18281` ("optimization grind")
+
+TODO (Richard): add the prompts from that session, if it used an AI assistant.
+
+## Session 3 — Sun Oct 25, 2026, ~12:00 AM (on the VM)
+
+### Prompt 34
+
+> run a benchmarking comparison between the preliminary submission at @PreliminarySubmission.ipynb
+> and most recent version @submission.ipynb
+
+(The assistant extracted the code cells of both notebooks to scratch `.py` files, found the
+preliminary one byte-identical to `tanish_submission.py`, ran `experiments/compare.py` on
+N ≤ 10, seeds 0–2, idle noise (`prelim_vs_latest.csv`) and the notebook's `score_solution` for
+the bonus. Result: Σ median 27.99 vs 27.53, Σ E 102.9 vs 90.8, bonus 37.15 vs 33.67.)
+
+### Prompt 35
+
+> how long until the main track comparison finishes?
+
+### Prompt 36 (plan mode; model switched to Claude Fable 5.1)
+
+> I want to do a merge and cleanup of the current codebase, mainly the richard branch and main
+> branch. Create a plan on what needs to be kept, what can be removed, and what should be
+> refactored.
+
+Clarifying questions from the assistant, and Richard's answers:
+
+- *What to do with `tanish_submission.py` and `PreliminarySubmission.ipynb`?* → "Delete both".
+- *How aggressively to prune experiments/results?* → "Moderate (Recommended)".
+- *HANDOFF.md?* → "Fold and delete (Recommended)".
+- *The running synth.py job?* → "Stop it before cleanup (Recommended)".
+
+Then: "Save the plan for now, I will use it in a bit".
+
+### Prompt 37 (model: Claude Opus 5.5)
+
+> follow the plan to merge branch richard into main and cleanup the codebase.
+
+(The assistant stopped the synthesis job and committed its checkpoints. It then deleted the
+two baseline files, HANDOFF.md, 7 unreferenced CSVs and the unused `_alap` option. It moved
+the ~200 lines of notebook prose in the vendored Bryan code to `docs/bryan_constructions.md`
+instead of deleting them, because they contain the derivations. HANDOFF's lasting content was
+folded into ARCHITECTURE.md §6–7, and stale claims in README/ARCHITECTURE/CLAUDE.md were fixed.
+`submission.ipynb` was regenerated, and it fast-forwarded `main` to `richard`.)

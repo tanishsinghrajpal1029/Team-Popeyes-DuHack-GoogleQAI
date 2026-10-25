@@ -15,9 +15,9 @@ fewer CZ:
 |---|---|---|
 | k = 0 | product state (nothing, or X on all) | 0 |
 | k = 1 | broadcast tree of amplitude splits (first split 1 CZ, then 2-CZ Givens) | 2N − 3 |
-| N ≤ 8, k ≥ 2 | whole-state exact Ry + CZ circuit, synthesized offline, placed at build time | D⁴₂ 5, D⁶₃ 15, D⁷₃ 25, D⁸₄ 27 |
+| N ≤ 8, k ≥ 2 (k = 2 at N ≥ 6 goes to Bryan's) | whole-state exact Ry + CZ circuit, synthesized offline, placed at build time | D⁴₂ 5, D⁶₃ 15, D⁷₃ 25, D⁸₄ 27 |
 | k ≤ 5, any N | Bärtschi–Eidenbenz built from synthesized nearest-neighbour SCS blocks on a path (no routing) | ≈ 4N (k=2); 12, 17, 29 per block (k=3, 4, 5) |
-| k = 2 with N ≥ 6, or k ≥ 3 with N ≥ 9 | Bryan's solution (vendored from `origin/bryan`): B-E with custom blocks and a two-arm "split" B-E | D⁸₂ 23, D¹⁰₅ 85 |
+| k = 2 with N ≥ 6, or k ≥ 3 with N ≥ 9 | Bryan's solution (vendored from `origin/bryan`; derivations in `docs/bryan_constructions.md`): B-E with custom blocks and a two-arm "split" B-E | D⁸₂ 23, D¹⁰₅ 85 |
 | everything else (fallback) | Bärtschi–Eidenbenz, routed on a low-error path with `cirq.RouteCQC` | O(nN) + routing |
 
 Dynamical decoupling (XY4) is added to idle windows with at least 4 free single-qubit
@@ -44,7 +44,7 @@ spread between qubits.
 ```bash
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python --prerelease=allow -r requirements.txt  # Willow105 needs cirq 1.8 dev
-.venv/bin/python -m pytest tests/ -q                     # exactness + rules, N <= 10, all n, 3 calibrations
+.venv/bin/python -m pytest tests/ -q                     # 388 tests: exactness + rules, N <= 10, golden N <= 8 (~70 s)
 
 # simulated scores (exact density matrix + 20k simulated 10k-shot runs), one CSV row per case
 .venv/bin/python experiments/evaluate.py --out mine.csv --nmin 2 --nmax 8 --noise idle --repeats 20000
@@ -58,11 +58,19 @@ uv pip install --python .venv/bin/python --prerelease=allow -r requirements.txt 
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1   # parallel jobs: one BLAS thread each
 .venv/bin/python experiments/synth.py --cases 4,2 5,2 6,2 6,3 7,2 7,3 8,2 8,3 8,4 --shapes path ladder
 .venv/bin/python experiments/synth.py --export
-.venv/bin/python experiments/scs_synth.py --kmin 1 --kmax 4 --mmax 20
+.venv/bin/python experiments/scs_synth.py --kmin 1 --kmax 5 --mmax 20
 .venv/bin/python experiments/scs_synth.py --export
 
-# slide figures
+# head-to-head of two submission files (any .py exposing create_dicke_state)
+.venv/bin/python experiments/compare.py --sub latest=main.py --sub other=other.py --out vs_other.csv
+.venv/bin/python experiments/harden.py --workers 8      # 969 builds, N <= 105, up to 15% dropout
+.venv/bin/python experiments/trajectory.py --out bign/traj_N15_n7.csv --N 15 --ns 7 --traj 300  # N >= 11
+
+# slide figures (score_tail, ceiling_fraction*, cz_counts*, tree_vs_chain)
 .venv/bin/python experiments/figures.py
+
+# rebuild submission.ipynb from main.py and execute it
+.venv/bin/python experiments/make_notebook.py --run
 ```
 
 Calibrations are the notebook's fake-data generators with fixed seeds (`experiments/calib.py`,
@@ -78,7 +86,7 @@ seeds 0, 1, 2).
 - Readout: asymmetric per-qubit bit flips from `zero_errors` / `one_errors`, in both bases.
 - Not modeled: coherent gate errors, ZZ crosstalk, leakage, per-qubit T1 spread, drift.
 
-## Variational angle choice (experiments/vqe.py, branch richard-vqe)
+## Variational angle choice (experiments/vqe.py)
 
 Hardware VQE does not apply here (no hardware at build time, exact state required); its
 classical half is `synth.py`. What remains is the freedom *inside* a synthesized structure:
@@ -103,7 +111,7 @@ the same CZ pattern has many exact angle sets, and they respond differently to e
 ## Layout
 
 ```
-main.py                 submission: create_dicke_state + helpers (cirq, cirq_google, numpy, networkx, stdlib)
+main.py                 submission: create_dicke_state + helpers (cirq, cirq_google, numpy, networkx, scipy, stdlib)
 submission.ipynb        main.py inside the challenge notebook (regenerate: experiments/make_notebook.py --run)
 experiments/calib.py    notebook calibration generators (verbatim) + seeded wrapper
 experiments/noise.py    calibrated noise model, detuning copies, readout confusion
@@ -115,7 +123,22 @@ experiments/synth.py    offline exact synthesis of small Dicke circuits
 experiments/scs_synth.py offline exact synthesis of B-E Split & Cyclic Shift blocks
 experiments/vqe.py      noise-aware choice among exact synthesized angle sets
 experiments/figures.py  every slide figure, from the CSVs
+experiments/compare.py  head-to-head of submission files; harden.py robustness sweep
+experiments/trajectory.py  quantum-trajectory evaluator for N >= 11
+experiments/mixed_moments.py  are mixed CZ + 1q moments where a gain comes from?
+experiments/compress.py warm-start CZ deletion (negative result, ARCHITECTURE section 6)
+experiments/make_notebook.py  main.py -> submission.ipynb
+docs/                   Bryan's derivations of his building blocks
 experiments/results/    every CSV behind the slides
 tests/                  pytest suite
 prompts.md              every AI prompt used (sponsor requirement)
 ```
+
+## Team branches
+
+- `origin/bryan`: Bryan's independent solution, vendored into `main.py` where it measured better.
+- `origin/tanish`, and commit `1995558` (`tanish_submission.py`, `PreliminarySubmission.ipynb`):
+  the preliminary combined submission (Tanish's N ≤ 3 builder, an older copy of ours, Aanha's
+  N ≥ 9 builder), used as the comparison baseline in ARCHITECTURE.md §4 and §6.
+- `origin/Aanha`: Aanha's builder.
+

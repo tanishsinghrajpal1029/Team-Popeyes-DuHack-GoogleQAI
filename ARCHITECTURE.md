@@ -49,18 +49,23 @@ expectation finite. A resampled mean there is dominated by a handful of lucky dr
 
 ```
 create_dicke_state(N, n, calibration)
- └─ build(..., w_tree, synth, scs, dd)                 defaults = the submission
-     ├─ k = 2 with N ≥ 6, or k ≥ 3 with N ≥ 9 → Bryan's solution (vendored), on failure fall through
-     ├─ k = min(n, N−n); if n > N/2, prepare D_{N−n} and flip every qubit at the end
-     ├─ k = 0  → product state (no gates, or X on all), best-readout qubits
-     ├─ k = 1  → W broadcast tree
-     ├─ (N, k) synthesized and cheaper than SCS → whole-state exact circuit, placed on chip
-     ├─ N = 2  → W pair chosen by simulating every placement (predicted E[score])
-     ├─ k ≤ 5  → Bärtschi–Eidenbenz from synthesized SCS blocks on a path
-     ├─ else   → Bärtschi–Eidenbenz, routed (RouteCQC) on a low-error path
-     ├─ compile to cirq.CZ + PhasedXZGate; every moment is all-CZ or all-1q
-     └─ dynamical decoupling: XY4 in idle windows with ≥ 4 free 1q slots
+ └─ build(..., w_tree, synth, scs, tiny, dd, bryan)   defaults = the submission
+     ├─ k = min(n, N−n); k = 2 with N ≥ 6, or k ≥ 3 with N ≥ 9 → Bryan's solution (vendored;
+     │     its own compile + DD, our DD is not added); on any exception fall through
+     └─ _build_core: if n > N/2, prepare D_{N−n} and flip every qubit at the end
+         ├─ k = 0  → product state (no gates, or X on all), best-readout qubits
+         ├─ k = 1, N = 2 → W pair chosen by simulating every placement (predicted E[score])
+         ├─ k = 1  → W broadcast tree
+         ├─ (N, k) in _SYNTH with raw CZ ≤ SCS CZ → whole-state exact circuit, placed on chip
+         ├─ k ≤ 5  → Bärtschi–Eidenbenz from synthesized SCS blocks on a path
+         ├─ else   → Bärtschi–Eidenbenz, routed (RouteCQC) on a low-error path
+         ├─ compile to cirq.CZ + PhasedXZGate; every moment is all-CZ or all-1q
+         └─ dynamical decoupling: XY4 in idle windows with ≥ 4 free 1q slots
 ```
+
+On the hardware track, k = 2 at N = 6–8 goes to Bryan before `_SYNTH` is consulted, and every
+other k ≥ 2 case up to N = 8 has a `_SYNTH` entry, so SCS and routed B-E run there only as
+fallbacks. They are the main path for the bonus entry (`bryan=False`) and for N > 20.
 
 The Dicke state is permutation-symmetric, so we return wherever the logical qubits end up.
 Routing permutations never need undoing.
@@ -75,7 +80,9 @@ beats ours for k = 2 with N ≥ 6 (1–7%, about 3 fewer CZ) and for k ≥ 3 wit
 D¹⁰₅ needs 85 CZ vs our 185). Ours win the W states, k = 2 up to N = 5, and k ≥ 3 up to
 N = 8 (by up to +28%). `main.py` vendors his file verbatim (four renames to avoid name
 clashes) and dispatches by that measured rule. The bonus entry returns the shallower of the
-two solutions per case.
+two solutions per case. His derivations of every building block (known-target rotations,
+the 2-CZ transfer bound, the 5-CZ G₃, the merged 4-CZ top block) are in
+`docs/bryan_constructions.md`.
 
 - **W tree (k = 1).**
   - Amplitude starts on a root. Each round, every qubit holding amplitude hands its
@@ -90,7 +97,7 @@ two solutions per case.
     layers of Ry on every qubit plus brickwork CZs on a fixed shape (a path or a 2×m ladder).
   - Exact-gradient L-BFGS drives infidelity below 1e-13, then greedy pruning deletes CZs
     while the circuit stays exact.
-  - Results: D⁴₂ 5 CZ, D⁶₃ 15, D⁷₃ 25, D⁸₄ 27 (routed B-E needs 21, 80, 98, 162).
+  - Results: D⁴₂ 5 CZ, D⁶₃ 15, D⁷₃ 25, D⁸₄ 27 (29 in the table; 2 cancel when compiled) (routed B-E needs 21, 80, 98, 162).
   - Synthesis takes minutes per case, so the angles are cached in `main.py`. They depend only
     on the shape. Placement (8 grid symmetries × translations, calibrated qubits and couplers
     only) is decided at build time.
@@ -140,7 +147,8 @@ uniform-uncertainty calibrations (0 of 75 placements changed).
 - Exact noiseless state, including a check with the notebook's own (fixed) `test_circuit`.
 - Only `cirq.CZ` on calibrated pairs, `PhasedXZGate` on calibrated qubits, and
   `ResetChannel`. This is stricter than `Willow105.validate_circuit`.
-- ≤ 1,750 moments and under 60 s build time. Builds currently take 0.1–3 s.
+- ≤ 1,750 moments and under 60 s build time. Builds typically take 0.1–3 s; the worst in
+  the hardening sweep is 8.2 s.
 - Coverage: every N ≤ 10 and every n, on 3 calibrations plus a 10%-dropout calibration.
 
 ## 3. How we evaluate
@@ -200,6 +208,20 @@ rows above are our constructions; for k = 2 with N ≥ 6 and k ≥ 3 with N ≥ 
 are Bryan's (`vs_bryan.csv`). Bonus: 37.2, the shallower of the two per case (ours 23.8,
 Bryan's 35.3).
 
+**Against the preliminary combined submission** (`prelim_vs_latest.csv`; teammates'
+`tanish_submission.py` at commit `1995558`, which uses an older copy of ours for 4 ≤ N ≤ 8 and
+Aanha's builder for N ≥ 9; same harness, 3 calibrations):
+
+| | preliminary | current |
+|---|---|---|
+| Σ median (25 cases, N ≤ 10) | 27.53 | **27.99** |
+| Σ E[score] | 90.77 | **102.88** |
+| bonus `score_solution` | 33.67 | **37.15** |
+
+The current submission wins k = 2 at N ≥ 6 (up to +16% at D¹⁰₂, from 31 vs 49 CZ), k = 3–4 at
+N = 9–10 (+4–5%) and N ≤ 3. The preliminary one wins D¹⁰₅ (−5%), D⁹₄ (−4%) and W₉/W₁₀
+(−0.5/−1.5%); see section 6 for why.
+
 **Totals over these 25 cases (our constructions only):**
 
 | | baseline | now | perfect state |
@@ -213,6 +235,7 @@ Bryan's 35.3).
 
 **Hardening** (`experiments/harden.py`, 969 builds, plus `tests/test_robustness.py`):
 - Every N ≤ 12 with every n, on 6 calibrations (1–15% qubit dropout): all exact and valid.
+- N = 13–30 (rules, build time, moment budget) and W states up to N = 105: all valid.
 - No crashes anywhere.
 - `NotImplementedError` only where the chip has no connected layout of size N (N ≥ 100 with
   dropouts).
@@ -230,9 +253,81 @@ yet. `score_solution` over 2 ≤ N ≤ 15 gives 37.2.
    a possible 185.5. W₂ now picks its qubit pair by predicted E[score]: +9% expected, −5% median,
    a deliberate trade toward the objective. For W₃ the same selector gained nothing, so it is
    off there.
-2. **D⁸₃ synthesis is stuck at 43 CZ** (D⁸₄ needs 27). The k=2 all-ones SCS block costs 7 CZ;
+2. **D⁸₃ synthesis: a 31-CZ circuit exists but is not deployed** (deployed: 43; D⁸₄ needs
+   27). `experiments/results/synth/D8_3_path_s1.json` from the overnight run. Deploying it
+   means `synth.py --export`, a robust-angle pick, and regenerating the golden test file. The k=2 all-ones SCS block costs 7 CZ;
    another model reports a 4-CZ equivalent, which would save 3 CZ in every k ≥ 3 SCS circuit.
 3. **Hardware gap.** Coherent errors, crosstalk, and the true T2* are unknown. For small K,
    1% over-rotation alone would cost about half the score. The hedges are the robust angle
    picks (all synthesized cases) and long-idle DD. Placement ranks every rate at
    value + 1σ, so qubits that only look good by chance are not preferred.
+
+## 6. Big N: diagnosis and what we tried
+
+**Diagnosis** (Bryan's circuits, deployed for k ≥ 3 at N ≥ 9; `portfolio.csv`):
+
+| case | CZ | duration | f | x (M=N) | median (M=N) | median (M=4) | correlator ratio, weight 2 … max |
+|---|---|---|---|---|---|---|---|
+| D9,3 | 50 | 1.83 µs | 0.777 | 0.225 | 0.651 | 0.702 | 0.81 … 0.67 |
+| D9,4 | 63 | 2.37 µs | 0.734 | 0.523 | 0.504 | 0.613 | 0.76 … 0.56 |
+| D10,3 | 59 | 1.83 µs | 0.748 | 0.252 | 0.619 | 0.671 | 0.80 … 0.65 |
+| D10,4 | 77 | 2.37 µs | 0.693 | 0.618 | 0.481 | 0.602 | 0.75 … 0.52 |
+| D10,5 | 85 | 2.64 µs | 0.668 | 1.020 | 0.391 | 0.564 | 0.72 … 0.45 |
+
+- One quantity, overall fidelity (~0.6–0.75), drives both terms: z ≈ 1/f, and x ≈ Σ over even
+  weights of (1 − ratio)², which grows with M. Imbalance is fine (χ²/(K−1) ≈ 1.02–1.09).
+- Gates and idling matter about equally. D10,5: gate noise only → median 0.53, idle only →
+  0.59, both → 0.375. So both CZ count and duration have to drop.
+
+**N = 11–15** (`bign/traj_*.csv`, quantum trajectories, 300 per case, calibration seed 0,
+debiased; `experiments/trajectory.py`). Median score, M = N:
+
+| k | N=11 | N=12 | N=13 | N=14 | N=15 |
+|---|---|---|---|---|---|
+| 1 | 1.048 | 0.999 | 0.951 | 0.941 | 0.958 |
+| 2 | 0.824 | 0.778 | 0.748 | 0.708 | 0.663 |
+| 3 | 0.510 | 0.530 | 0.497 | 0.447 | 0.445 |
+| ⌊N/2⌋ | 0.321 | 0.255 | 0.237 | 0.168 | 0.154 |
+
+W states stay at 82–89% of ceiling; half-filling falls to ~15%. An exact density matrix for
+D12,6 (`bign/probe.csv`, 59 min) gives 0.260, matching the trajectory estimate (0.255).
+
+**Teammates' builder (Aanha's, inside `tanish_submission.py`).** All exact and valid; hardening
+961/969 (the same 8 impossible requests); worst build 30 s. Out of sample (seeds 3–5,
+`vs_tanish_seeds345.csv`) it wins only where it won on the bench seeds: W states (+1–3%) and
+n = ⌊N/2⌋ (+2–3%); it loses k = 2 (−15%) and k = 3–4 (−3 to −8%). At N = 11–15 and n = ⌊N/2⌋ it is
+ahead by 3–13% except at N = 12 (tie). Two reasons:
+- its W trees stay at 14 moments for every N (ours grow to 19–23);
+- it packs single-qubit gates into CZ moments, which our noise model treats as free. Stratifying
+  its D10,5 circuit (seed 0) costs 0.410 → 0.394 (`bign/mixed_probe.csv`, `experiments/mixed_moments.py`),
+  so about half its edge there is this timing assumption. **Open question:** do mixed CZ + 1q
+  moments behave on Willow as the model assumes? `_to_cz_phxz` deliberately stratifies.
+
+**What did not work:**
+- **Whole-state re-synthesis at N = 9–10** (`synth.py`, overnight, 24 workers, stopped): best
+  exact circuits D9,2 33 CZ, D10,2 35, D9,4 98, D9,3 136, vs 27, 31, 63, 50 deployed.
+  Ladder shapes became exact only for D10,2 (50 CZ). The random-start brickwork approach stops scaling at N ≈ 9.
+- **Warm-start compression of Bryan's circuits** (`experiments/compress.py`): an exact U3
+  re-parametrization of his D9,3, then greedy single-CZ deletion. Exactness was recovered 0 of
+  8 times (best residual 1.6e-4); the split construction is locally tight.
+- **ALAP scheduling** (keep qubits in |0⟩ longer): −1.4 to +0.1% E[score] under idle noise; removed.
+
+## 7. Maintenance notes
+
+- **Exports rewrite `main.py`** between `BEGIN`/`END` markers: `synth.py --export` → `_SYNTH`
+  (applies `results/vqe/picks.json` only when structure and solution match);
+  `scs_synth.py --export` → `_SCS`; `vqe.py apply` → `picks.json` (follow with `synth.py --export`).
+  After any change to `main.py`, run `experiments/make_notebook.py --run`.
+- **Bryan's code is vendored verbatim** with renames `_X → _BRYAN_X`, `_Y → _BRYAN_Y`,
+  `create_dicke_state(_adaptive) → _bryan_create_dicke_state(_adaptive)`. Our `_X`/`_Y` are DD
+  pulses.
+- `evaluate.py --opt key=value` / `trajectory.py --opt` pass options to `main.build`:
+  `bryan=false`, `synth=false`, `scs=false`, `tiny=false`, `w_tree=false`, `dd=false`.
+- `tests/test_golden_small_n.py` freezes every N ≤ 8 circuit. Regenerate
+  (`--regen`) only for a case that measured strictly better, with before/after numbers in the
+  commit message.
+- Parallel jobs: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` (else ~15× slower), total processes
+  ≤ vCPUs, and a separate `--out` CSV per concurrent run.
+- **Assumptions behind big-N conclusions:** Tφ = 100 µs and 25/42 ns layer durations are
+  assumed (T1 = 68 µs is the spec sheet). The judges' `max_correlator_size` and (N, n) set are
+  unknown; we report M = N, and M = 4 is in every CSV.
