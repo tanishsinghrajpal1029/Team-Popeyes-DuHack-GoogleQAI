@@ -57,7 +57,7 @@ uv pip install --python .venv/bin/python --prerelease=allow -r requirements.txt 
 # regenerate the synthesized tables embedded in main.py (export_table re-verifies each entry)
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1   # parallel jobs: one BLAS thread each
 .venv/bin/python experiments/synth.py --cases 4,2 5,2 6,2 6,3 7,2 7,3 8,2 8,3 8,4 --shapes path ladder
-.venv/bin/python experiments/synth.py --export
+.venv/bin/python experiments/synth.py --export --nmax 8   # N <= 8 only: the N = 9-10 results are worse than Bryan's
 .venv/bin/python experiments/scs_synth.py --kmin 1 --kmax 5 --mmax 20
 .venv/bin/python experiments/scs_synth.py --export
 

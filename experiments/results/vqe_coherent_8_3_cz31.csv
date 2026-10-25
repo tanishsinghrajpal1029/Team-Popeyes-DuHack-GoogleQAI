@@ -1,0 +1,2 @@
+N,k,candidate,rot_eps,rot_sigma,cz_eps,z_sigma,lam_rot,lam_rot_rand,lam_cz,lam_z_rand
+8,3,0,0.01,0.01,0.02,0.02,107.3042476105342,85.61845776706217,0.0069746211372448035,0.014464741952815897

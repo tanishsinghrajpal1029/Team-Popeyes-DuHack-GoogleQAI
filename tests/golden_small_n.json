@@ -1034,9 +1034,17 @@
   "repr_sha256": "10f1455105b2e9b669b6eb6f43e6a6c84af68aa8d755520f1eda96c6296a3906"
  },
  "seed0/D8,3": {
-  "cz": 43,
+  "cz": 31,
   "moments": 31,
   "qubits": [
+   [
+    6,
+    0
+   ],
+   [
+    6,
+    1
+   ],
    [
     6,
     2
@@ -1060,17 +1068,9 @@
    [
     6,
     7
-   ],
-   [
-    6,
-    8
-   ],
-   [
-    6,
-    9
    ]
   ],
-  "repr_sha256": "dfecfefd2405c7ddb69e91e6d528c671130cf5a2096215c9d0fa3ad14eb54601"
+  "repr_sha256": "b0db7573f5536a266e30c389820172e66d804812a47b7b9e27dbe1ce8e7d1e82"
  },
  "seed0/D8,4": {
   "cz": 27,
@@ -1112,43 +1112,43 @@
   "repr_sha256": "491d71cd0527abc6024a64a006e3d503ccff30b133cb322db8e21e280ee1dae3"
  },
  "seed0/D8,5": {
-  "cz": 43,
+  "cz": 31,
   "moments": 31,
   "qubits": [
    [
-    2,
-    10
-   ],
-   [
-    3,
-    10
-   ],
-   [
-    4,
-    10
-   ],
-   [
-    5,
-    10
+    6,
+    0
    ],
    [
     6,
-    10
+    1
    ],
    [
-    7,
-    10
+    6,
+    2
    ],
    [
-    8,
-    10
+    6,
+    3
    ],
    [
-    9,
-    10
+    6,
+    4
+   ],
+   [
+    6,
+    5
+   ],
+   [
+    6,
+    6
+   ],
+   [
+    6,
+    7
    ]
   ],
-  "repr_sha256": "3358b8c04f7ff46437ea3a4b6a6c1b2acf245497f00d26d0b8648c0435416f9e"
+  "repr_sha256": "72d250ddb9775e9ed415e7575b0d1f97123646b53ce43cb4e5384c35d7ec7a5e"
  },
  "seed0/D8,6": {
   "cz": 23,
@@ -2302,7 +2302,7 @@
   "repr_sha256": "9db2a2abdbece5d16f04ed0d922a8b8ec7796b82e16a3391f4980e9e5383b444"
  },
  "seed1/D8,3": {
-  "cz": 43,
+  "cz": 31,
   "moments": 31,
   "qubits": [
    [
@@ -2338,7 +2338,7 @@
     5
    ]
   ],
-  "repr_sha256": "98b4b9fb44a7876d7b3bd8db6a89b220975b55066d1df9038478bdddaeefb9da"
+  "repr_sha256": "2b015581219d543429292c7f914957887fba10a3711dbdaad13d897c297cfeb9"
  },
  "seed1/D8,4": {
   "cz": 27,
@@ -2380,13 +2380,9 @@
   "repr_sha256": "0a7f7c7ac5c509facee8fc9b1c978a934b0fd9d95cbe54da8ab78976f631bd37"
  },
  "seed1/D8,5": {
-  "cz": 43,
+  "cz": 31,
   "moments": 31,
   "qubits": [
-   [
-    2,
-    5
-   ],
    [
     3,
     5
@@ -2414,9 +2410,13 @@
    [
     9,
     5
+   ],
+   [
+    10,
+    5
    ]
   ],
-  "repr_sha256": "61d974cf7f8766e2ff29b7b0eeb696e43bee948d7d8bf538b51d0180ca8531c8"
+  "repr_sha256": "20c588a6432d65f582bede3f791da65740e63f27b1ab98c92b256fa509150f69"
  },
  "seed1/D8,6": {
   "cz": 23,
@@ -3570,7 +3570,7 @@
   "repr_sha256": "f857c7fd88e46c4211a3f2624e63bb72ac85756f61a92398c059adf842ef39f1"
  },
  "seed2/D8,3": {
-  "cz": 43,
+  "cz": 31,
   "moments": 31,
   "qubits": [
    [
@@ -3606,7 +3606,7 @@
     11
    ]
   ],
-  "repr_sha256": "684cb5ea421d918a425704458e617161c3820654a0493e38ef5f05687e86735f"
+  "repr_sha256": "a4c37308dd7844c093bd163a283e52d886e705442276e38a5d0e89507e8169ab"
  },
  "seed2/D8,4": {
   "cz": 27,
@@ -3648,7 +3648,7 @@
   "repr_sha256": "84f7aea61d4b29eadbd5cd18aeb5b6ffa573eca92f09bb84e73ebffb1bf722ed"
  },
  "seed2/D8,5": {
-  "cz": 43,
+  "cz": 31,
   "moments": 31,
   "qubits": [
    [
@@ -3684,7 +3684,7 @@
     11
    ]
   ],
-  "repr_sha256": "d88dd72893904c4dab7063395359ffb90910d659929ca992f2e31be48e573a09"
+  "repr_sha256": "7a489b069938da9b7779be9244cb26e07eca45feb3f2a6713f41b8ea302fa663"
  },
  "seed2/D8,6": {
   "cz": 23,

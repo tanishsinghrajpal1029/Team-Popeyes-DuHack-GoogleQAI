@@ -365,3 +365,27 @@ the ~200 lines of notebook prose in the vendored Bryan code to `docs/bryan_const
 instead of deleting them, because they contain the derivations. HANDOFF's lasting content was
 folded into ARCHITECTURE.md §6–7, and stale claims in README/ARCHITECTURE/CLAUDE.md were fixed.
 `submission.ipynb` was regenerated, and it fast-forwarded `main` to `richard`.)
+
+### Prompt 38
+
+> export the 31-CZ D8,3 circuit and re-score it
+
+(The assistant added `--nmax` to `synth.py --export` so the N = 9–10 results stay out of the
+table, exported D8,3 (43 → 31 CZ), and re-scored it against the old circuit on seeds 0–5
+(`d83_export.csv`). It also fixed `vqe.py`'s candidate cache, which was keyed by (N, k) only
+and would have reused the old structure's angles.)
+
+### Prompt 39
+
+> how much longer do you estimate the run will take?
+
+(Answer: ~40 min, probably ending at the 480-restart cap with few exact alternatives. Options:
+measure only the deployed angles, or parallelize the restarts.)
+
+### Prompt 40
+
+> do option 1
+
+(The assistant stopped the run and measured the deployed angles' coherent-error sensitivity
+(`vqe_coherent_8_3_cz31.csv`). It came out close to the old pick (λ 107 vs 86 uniform, 86 vs 112
+per-qubit), so the export was kept. It then regenerated the golden file and the notebook.)

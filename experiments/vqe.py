@@ -68,8 +68,11 @@ def load_or_make_family(N, k, entry, samples, seed):
     path = os.path.join(CANDS, f"D{N}_{k}_cands_s{seed}.json")
     if os.path.exists(path):
         with open(path) as fh:
-            family = [np.array(p) for p in json.load(fh)["params"]]
-        if len(family) >= samples:
+            cached = json.load(fh)
+        family = [np.array(p) for p in cached["params"]]
+        same = ([[list(e) for e in l] for l in cached["cz_layers"]]
+                == [[list(e) for e in l] for l in entry["cz_layers"]])
+        if same and len(family) >= samples:  # a re-exported structure invalidates the cache
             return family[:samples]
     t0 = time.time()
     family, tries = exact_family(N, k, entry["cz_layers"], entry["params"], samples, seed)

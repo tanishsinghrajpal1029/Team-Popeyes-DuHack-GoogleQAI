@@ -108,7 +108,11 @@ the 2-CZ transfer bound, the 5-CZ G₃, the merged 4-CZ top block) are in
     chosen on calibration seed 0 and checked on seeds 1–2.
   - Effect: sensitivity to 1% over-rotation drops 1.1–5.5× (D⁵₂: λ 50 → 9). The cost under our
     standard noise model is between −0.9 and +2.6 points of ceiling share.
-  - Status: deployed for every synthesized case (N ≤ 8).
+  - Status: deployed for every synthesized case (N ≤ 8) except D⁸₃, whose 31-CZ structure
+    (exported Oct 25) has no alternative exact angle sets yet: random restarts rarely reach
+    exactness on it (0 of 4 in a timing test). Its sensitivity is close to the old 43-CZ pick:
+    λ 107 vs 86 for uniform 1% over-rotation, 86 vs 112 for per-qubit 1%
+    (`vqe_coherent_8_3_cz31.csv` vs `vqe_coherent_8_3.csv`).
 - **SCS blocks (k ≤ 5;** `experiments/scs_synth.py`**).**
   - B-E's Split & Cyclic Shift block SCS_{m,k} acts on k+1 consecutive line qubits, and its
     input is always a sorted string. That makes each block a small isometry, which we
@@ -187,7 +191,7 @@ with a chain for W states.
 | D7,3 | 35 | whole-state synth | 98 → 25 | 0.893 | 1.013 | 0.0855 | 0.45 → 0.89 | 0.859 | 42% → 82% |
 | W8 | 8 | tree | 14 → 13 | 0.924 | 1.017 | 0.0035 | 1.40 → 1.44 | 1.141 | 88% → 90% |
 | D8,2 | 28 | whole-state synth | 72 → 26 | 0.878 | 1.068 | 0.0381 | 0.58 → 0.89 | 0.847 | 53% → 80% |
-| D8,3 | 56 | whole-state synth | 123 → 43 | 0.851 | 1.054 | 0.1488 | 0.39 → 0.75 | 0.740 | 38% → 72% |
+| D8,3 | 56 | whole-state synth | 123 → 31 | 0.865 | 1.026 | 0.1115 | 0.39 → 0.81 | 0.792 | 38% → 77% |
 | D8,4 | 70 | whole-state synth | 162 → 27 | 0.868 | 1.024 | 0.1209 | 0.24 → 0.80 | 0.785 | 24% → 77% |
 | W9 | 9 | tree | 16 → 15 | 0.914 | 1.015 | 0.0040 | 1.33 → 1.34 | 1.097 | 89% → 89% |
 | D9,2 | 36 | SCS blocks | 89 → 30 | 0.822 | 1.022 | 0.0564 | 0.45 → 0.83 | 0.805 | 42% → 77% |
@@ -253,9 +257,10 @@ yet. `score_solution` over 2 ≤ N ≤ 15 gives 37.2.
    a possible 185.5. W₂ now picks its qubit pair by predicted E[score]: +9% expected, −5% median,
    a deliberate trade toward the objective. For W₃ the same selector gained nothing, so it is
    off there.
-2. **D⁸₃ synthesis: a 31-CZ circuit exists but is not deployed** (deployed: 43; D⁸₄ needs
-   27). `experiments/results/synth/D8_3_path_s1.json` from the overnight run. Deploying it
-   means `synth.py --export`, a robust-angle pick, and regenerating the golden test file. The k=2 all-ones SCS block costs 7 CZ;
+2. **D⁸₃ now 31 CZ** (was 43; `synth/D8_3_path_s1.json` from the overnight run, exported with
+   `synth.py --export --nmax 8`). On 6 calibrations (`d83_export.csv`, 20k repeats) the median
+   rises 0.745 → 0.792 on seeds 0–2 and 0.727 → 0.776 on held-out seeds 3–5 (+6.3/+6.7%), with
+   f 0.83 → 0.86 and x 0.15 → 0.11. It still lacks a robust angle pick (see above). The k=2 all-ones SCS block costs 7 CZ;
    another model reports a 4-CZ equivalent, which would save 3 CZ in every k ≥ 3 SCS circuit.
 3. **Hardware gap.** Coherent errors, crosstalk, and the true T2* are unknown. For small K,
    1% over-rotation alone would cost about half the score. The hedges are the robust angle
