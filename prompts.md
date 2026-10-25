@@ -502,7 +502,11 @@ notebook's `score_solution`, updated ARCHITECTURE.md, and committed and pushed b
 
 > you are still autonomous do not end
 
-(Work under prompts 48–50: whole-arm synthesized blocks (m0 = arm length) lifted the bonus to
-42.72; a many-seed re-synthesis of every N ≤ 8 case was started for both tracks (fewest layers
-for the bonus, fewest CZs for the hardware path, the latter deployed only if `evaluate.py`
-measures it better on three calibrations).)
+(Work under prompts 48–50, Sun 04:45–07:45 UTC: whole-arm synthesized blocks (m0 = arm length)
+lifted the bonus to 42.72, then U₇ r≤3, U₄/U₅ r≤2 and U₇ r≤4 blocks and a many-seed re-synthesis
+of every N ≤ 8 case took it to **43.65** (notebook `score_solution`, all 56 cases exact, routed,
+whitelisted; commits a63b328 … b3bbd0f on `richard`). The fewest-CZ small-N circuits from the
+same runs were evaluated for the hardware track on three calibrations and not deployed (none
+measured better; ARCHITECTURE.md section 6). Searches that did not land: U₅ r≤5, U₆ r≤5,
+U₈ r≤3, ladder-shaped blocks, randomized W-tree matchings. A seed collision overwrote two
+synthesis result files; they were restored from git.)

@@ -282,7 +282,21 @@ now builds every exact candidate below, checks nothing else, and returns the sha
   for the 6–8 qubit blocks was worse than the path (U₆ r≤4 not exact at 30 layers vs 21). The layer count found varies
   2–6 between seeds (U₄ r≤4: 14–21 layers over 12 seeds), so every block got 8–13 seeds.
   Effect: D⁹₃ 54 → 36, D¹¹₄ 88 → 51, D¹²₄ 88 → 51, D¹³₂/D¹⁴₂ 40 → 31, D¹⁵₂ 46 → 36,
-  D¹³₃/D¹⁴₃ 82 → 48/49, D¹⁴₄ 106 → 78, D¹⁵₃ 96 → 62, D¹⁵₄ 124 → 92, D¹⁵₇ 160 → 144. The thermometer order never changed a winner (bottom-up always won); putting
+  D¹³₃/D¹⁴₃ 82 → 48/49, D¹³₄/D¹⁴₄ 106 → 66/67, D¹⁵₃ 96 → 62, D¹⁵₄ 124 → 88, D¹⁵₇ 160 → 144.
+  Moments per case now (`notebook_bonus.csv`), by n:
+
+  | n | moments for N = n·2 … 15 |
+  |---|---|
+  | 1 | 3, 6, 7, 9, 10, 10, 11, 12, 13, 13, 13, 14, 14, 14 (N = 2…15) |
+  | 2 | 7, 13, 16, 21, 22, 25, 27, 31, 31, 31, 31, 35 (N = 4…15) |
+  | 3 | 15, 21, 29, 36, 37, 45, 45, 48, 49, 62 (N = 6…15) |
+  | 4 | 24, 50, 51, 51, 51, 66, 67, 88 (N = 8…15) |
+  | 5 | 73, 88, 94, 106, 112, 124 (N = 10…15) |
+  | 6 | 103, 116, 124, 134 (N = 12…15) |
+  | 7 | 133, 144 (N = 14, 15) |
+
+  What is left is the k ≥ 5 family (12 cases, 8.5 points): their arms carry every weight up to
+  the arm length, and no exact block beyond U₄ r≤4 was found for them. The thermometer order never changed a winner (bottom-up always won); putting
   the thermometer on the non-critical arm did, by 2–6 moments.
 - k = 2: a *partial* tail does not beat the 4-CZ top blocks (U₃ r≤2 15 vs 13, U₄ r≤2 19 vs 19),
   but a whole-arm block does (U₆/U₇ r≤2 at 27 moments), so D¹¹₂–D¹⁵₂ dropped 3–10 moments;
