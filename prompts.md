@@ -389,3 +389,16 @@ measure only the deployed angles, or parallelize the restarts.)
 (The assistant stopped the run and measured the deployed angles' coherent-error sensitivity
 (`vqe_coherent_8_3_cz31.csv`). It came out close to the old pick (λ 107 vs 86 uniform, 86 vs 112
 per-qubit), so the export was kept. It then regenerated the golden file and the notebook.)
+
+### Prompt 41
+
+> I want to run a comprehensive cleanup of @main.py so it's easier to read and shorter in length. Plan it.
+
+(Plan mode. The assistant asked two scope questions. Answers: *behavior?* → "Behavior-preserving
+(Recommended)"; *edit the vendored section?* → "Edit freely (Recommended)". It then implemented
+the approved plan: entry points first, then our constructions, then Bryan's, with the data
+tables at the end. It added shared constants and helpers (`_readout`, `_imbalance_penalty`,
+`finish`, `_routed_bartschi_eidenbenz`), merged `beam_paths`/`extend_path` into `_grow_paths`,
+removed the dead k = 1 branch of `generate_candidates`, and trimmed the restating comments.
+Checked by hashing every returned circuit before and after: hardware N ≤ 15 on 3 calibrations,
+every `build()` switch, every bonus case. All 726 were identical; bonus score 37.154.)

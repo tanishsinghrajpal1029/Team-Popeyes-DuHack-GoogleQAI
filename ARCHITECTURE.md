@@ -78,8 +78,8 @@ two-arm "split" B-E that runs two half-size B-E circuits in parallel), places th
 keeps the one with the best predicted log-fidelity. Under our harness (`vs_bryan.csv`) it
 beats ours for k = 2 with N ≥ 6 (1–7%, about 3 fewer CZ) and for k ≥ 3 with N ≥ 9 (21–39%;
 D¹⁰₅ needs 85 CZ vs our 185). Ours win the W states, k = 2 up to N = 5, and k ≥ 3 up to
-N = 8 (by up to +28%). `main.py` vendors his file verbatim (four renames to avoid name
-clashes) and dispatches by that measured rule. The bonus entry returns the shallower of the
+N = 8 (by up to +28%). `main.py` vendors his file (cleaned up, every returned circuit unchanged) and
+dispatches by that measured rule. The bonus entry returns the shallower of the
 two solutions per case. His derivations of every building block (known-target rotations,
 the 2-CZ transfer bound, the 5-CZ G₃, the merged 4-CZ top block) are in
 `docs/bryan_constructions.md`.
@@ -323,9 +323,12 @@ ahead by 3–13% except at N = 12 (tie). Two reasons:
   (applies `results/vqe/picks.json` only when structure and solution match);
   `scs_synth.py --export` → `_SCS`; `vqe.py apply` → `picks.json` (follow with `synth.py --export`).
   After any change to `main.py`, run `experiments/make_notebook.py --run`.
-- **Bryan's code is vendored verbatim** with renames `_X → _BRYAN_X`, `_Y → _BRYAN_Y`,
-  `create_dicke_state(_adaptive) → _bryan_create_dicke_state(_adaptive)`. Our `_X`/`_Y` are DD
-  pulses.
+- **Bryan's code** (`origin/bryan @ b94cb62`) is the second half of `main.py`. It was cleaned up
+  on Oct 24 without changing any returned circuit: the restating comments were removed,
+  `beam_paths`/`extend_path` were merged into `_grow_paths`, and the unused k = 1 branch of
+  `generate_candidates` (with `grow_tree`) was dropped. Renames: `create_dicke_state(_adaptive) →
+  _bryan_create_dicke_state(_adaptive)`, and his Pauli matrices are `_MX`/`_MY`. `_X`/`_Y` are
+  PhasedXZ pulses. The tables `_SYNTH` and `_SCS` sit at the end of the file.
 - `evaluate.py --opt key=value` / `trajectory.py --opt` pass options to `main.build`:
   `bryan=false`, `synth=false`, `scs=false`, `tiny=false`, `w_tree=false`, `dd=false`.
 - `tests/test_golden_small_n.py` freezes every N ≤ 8 circuit. Regenerate

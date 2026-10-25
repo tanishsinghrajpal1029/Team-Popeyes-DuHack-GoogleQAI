@@ -4,12 +4,16 @@ Only cirq, cirq_google, their dependencies (numpy, networkx, and scipy, imported
 _expected_score) and the standard library are imported, as the challenge requires.
 
 build() is a measured portfolio. With k = min(n, N - n):
-  - k = 2 with N >= 6, or k >= 3 with N >= 9: Bryan's vendored solution (bottom of this file);
-  - otherwise ours: product state (k = 0), W broadcast tree (k = 1), whole-state synthesized
-    circuits (_SYNTH, N <= 8), Baertschi-Eidenbenz from synthesized SCS blocks (_SCS, k <= 5),
-    and routed Baertschi-Eidenbenz (arXiv:1904.07358) as the last resort.
+  k = 2 with N >= 6, or k >= 3 with N >= 9   Bryan's solution (second half of this file)
+  k = 0                                      product state on the best-readout qubits
+  k = 1, N = 2                               W pair chosen by simulating every placement
+  k = 1                                      W broadcast tree
+  (N, k) in _SYNTH                           whole-state synthesized circuit, placed on chip
+  k <= 5                                     Baertschi-Eidenbenz from synthesized SCS blocks
+  otherwise                                  Baertschi-Eidenbenz (arXiv:1904.07358), routed
 For n > N/2 we prepare D_{N-n} and flip every qubit. The Dicke state is permutation-symmetric,
-so wherever placement or routing leaves the logical qubits is a valid answer.
+so wherever placement or routing leaves the logical qubits is a valid answer. The synthesized
+tables (_SYNTH, _SCS) are at the end of the file.
 """
 
 import heapq
@@ -22,12 +26,214 @@ import networkx as nx
 import numpy as np
 
 
+# Layer durations (s); the calibration data has no timing information.
+T_1Q = 25e-9
+T_CZ = 42e-9
+
 # Only attempt the second routing variant if the first finished within this many seconds,
 # so the 60 s build limit holds with a wide margin on slower machines.
 _SECOND_TRY_BUDGET_S = 10.0
 
+# Native pulses: X flips qubits (complement trick, product states); X and Y echo idle windows.
+_X = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0)
+_Y = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0.5)
 
-# ---- calibration graph ----------------------------------------------------------------
+# 2x2 matrices
+_I2 = np.eye(2, dtype=complex)
+_MX = np.array([[0, 1], [1, 0]], dtype=complex)
+_MY = np.array([[0, -1j], [1j, 0]], dtype=complex)
+_MZ = np.array([[1, 0], [0, -1]], dtype=complex)
+_H = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)
+_S = np.diag([1, 1j]).astype(complex)  # S = sqrt(Z)
+
+
+# =============================================================================================
+# Entry points
+# =============================================================================================
+
+
+def create_dicke_state(
+    num_qubits: int,
+    num_excitations: int,
+    cz_pauli_error_rate: dict[
+        tuple[cirq.GridQubit, cirq.GridQubit], tuple[float, float]
+    ],
+    sq_pauli_error_rate: dict[cirq.GridQubit, tuple[float, float]],
+    zero_errors: dict[cirq.GridQubit, tuple[float, float]],
+    one_errors: dict[cirq.GridQubit, tuple[float, float]],
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """Create a Cirq circuit that produces a Dicke state.
+
+    Args:
+        num_qubits: The number, N, of qubits in the Dicke state.
+        num_excitations: The number, n, of 1s in the state.
+        cz_pauli_error_rate: Measured CZ Pauli error rates and their statistical uncertainties.
+        sq_pauli_error_rate: Measured single-qubit Pauli error rates and their statistical uncertainties.
+        zero_errors: Measured parallel 0 -> 1 readout error rates and their statistical uncertainties.
+        one_errors: Measured 1 -> 0 readout error rates and their statistical uncertainties.
+
+    Returns:
+        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
+
+    Raises:
+        NotImplementedError: The requested (N, n) combination is not implemented.
+    """
+    return build(
+        num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+        zero_errors, one_errors,
+    )
+
+
+def create_dicke_state_adaptive(
+    num_qubits: int, num_excitations: int
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """Create a Cirq circuit that produces a Dicke state, allowing for adaptive circuits.
+
+    This entry is not adaptive yet: it returns the shallower of our exact unitary
+    construction (uniform calibration, packed for depth) and Bryan's bonus solution.
+    Every measurement branch is trivially exact because there are no measurements.
+
+    Args:
+        num_qubits: The number, N, of qubits in the Dicke state.
+        num_excitations: The number, n, of 1s in the state.
+
+    Returns:
+        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
+
+    Raises:
+        NotImplementedError: The requested (N, n) combination is not implemented.
+    """
+    N, n = int(num_qubits), int(num_excitations)
+    ours, qs = build(N, n, **_uniform_calibration(), dd=False, bryan=False)
+    best = (_pack(ours), qs)
+    try:  # Bryan's bonus solution is shallower for most cases: keep whichever is shallower
+        theirs = _bryan_create_dicke_state_adaptive(N, n)
+        if len(theirs[0]) < len(best[0]):
+            best = theirs
+    except NotImplementedError:
+        pass
+    return best
+
+
+def build(
+    num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
+    zero_errors, one_errors, *, w_tree: bool = True, synth: bool = True,
+    scs: bool = True, tiny: bool = True, dd: bool = True, bryan: bool = True,
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    """`create_dicke_state` with switches for the experiments (defaults = submission)."""
+    N, n = int(num_qubits), int(num_excitations)
+    if N < 1 or not 0 <= n <= N:
+        raise NotImplementedError(f"invalid (N, n) = ({N}, {n})")
+    cal = (cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors)
+    if bryan and _bryan_wins(N, n):
+        try:
+            return _bryan_create_dicke_state(N, n, *cal)
+        except Exception:  # any failure there: fall back to our constructions below
+            pass
+    circuit, qubits = _build_core(N, n, *cal, w_tree=w_tree, synth=synth, scs=scs, tiny=tiny)
+    return (_add_dd(circuit) if dd else circuit), qubits
+
+
+def _bryan_wins(N: int, n: int) -> bool:
+    """Where Bryan's constructions measured better (experiments/results/vs_bryan.csv,
+    25 cases x 3 calibrations, idle noise): k = 2 for N >= 6 (1-7% higher median score; ~3
+    fewer CZ) and k >= 3 for N >= 9 (21-39%; the split B-E halves the CZ count). Ours win the
+    W states, k = 2 up to N = 5 and k >= 3 up to N = 8 (whole-state synthesis, up to +28%)."""
+    k = min(n, N - n)
+    return (k == 2 and N >= 6) or (k >= 3 and N >= 9)
+
+
+def _build_core(
+    N, n, cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors, *,
+    w_tree: bool, synth: bool, scs: bool, tiny: bool,
+) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
+    flip = n > N - n  # D^N_n = X^N D^N_{N-n}: prepare the lighter one
+    k = N - n if flip else n
+    node_cost = {
+        q: _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N)
+        for q in sq_pauli_error_rate
+    }
+
+    def finish(logical, qubits):
+        if flip:
+            logical.append(cirq.X.on_each(*qubits))
+        return _to_cz_phxz(logical), set(qubits)
+
+    if k == 0:  # product state: |0...0> or |1...1>
+        qubits = sorted(node_cost, key=node_cost.get)[:N]
+        if len(qubits) < N:
+            raise NotImplementedError("not enough calibrated qubits")
+        return cirq.Circuit([_X.on(q) for q in qubits] if flip else []), set(qubits)
+
+    g = _usable_graph(cz_pauli_error_rate, sq_pauli_error_rate)
+
+    # Measured (experiments/results/tiny.csv): for W2 this raises E[score] 60.2 -> 65.6 while
+    # the median dips 4.37 -> 4.16; for W3 it gains nothing, so only N = 2 uses it.
+    if k == 1 and w_tree and tiny and N == 2:
+        picked = _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate,
+                              zero_errors, one_errors)
+        if picked is not None:
+            return picked
+
+    if k == 1 and w_tree:
+        tree_cost = {  # a tree node receives ~4 non-virtual single-qubit gates
+            q: _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N, n_sq=4)
+            for q in sq_pauli_error_rate
+        }
+        tree = _best_w_tree(g, N, tree_cost, zero_errors, one_errors)
+        if tree is not None:
+            root, rounds = tree
+            qubits = {root} | {c for r in rounds for _, c in r}
+            return finish(_w_tree_circuit(root, rounds), sorted(qubits))
+
+    scs_cz = _scs_cz_count(N, k) if scs else None
+    synth_entry = _SYNTH.get((N, k)) if synth else None
+    if synth_entry is not None and (scs_cz is None or sum(map(len, synth_entry["cz_layers"])) <= scs_cz):
+        qs = _place_synth(g, synth_entry, n, sq_pauli_error_rate, zero_errors, one_errors)
+        if qs is not None:
+            return finish(_synth_circuit(synth_entry, qs), qs)
+
+    if scs_cz is not None:
+        paths = _best_path(g, N, node_cost, edge_weight=scs_cz / (N - 1), keep=16)
+        if paths:
+            _, path = min(paths, key=lambda t: t[0] + _imbalance_penalty(
+                t[1], n, t[0], zero_errors, one_errors))
+            return finish(_scs_circuit(N, k, path), path)
+
+    return _routed_bartschi_eidenbenz(g, N, k, flip, node_cost)
+
+
+# ---- bonus track helpers ----------------------------------------------------------------------
+
+
+def _uniform_calibration() -> dict:
+    """The bonus provides no error rates: every Willow105 qubit and coupler, equal rates
+    (typical values, so the layout searches weigh CZ, 1q gates and readout as on hardware)."""
+    qubits = sorted(cirq_google.Willow105.metadata.qubit_set)
+    pairs = [tuple(sorted(p)) for p in cirq_google.Willow105.metadata.qubit_pairs]
+    return dict(
+        cz_pauli_error_rate={p: (2.5e-3, 0.0) for p in pairs},
+        sq_pauli_error_rate={q: (4e-4, 0.0) for q in qubits},
+        zero_errors={q: (5e-3, 0.0) for q in qubits},
+        one_errors={q: (1e-2, 0.0) for q in qubits},
+    )
+
+
+def _pack(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Fewest moments: merge single-qubit runs, then re-insert every operation as early as
+    possible (single-qubit gates may share a moment with CZs; depth is all that is scored)."""
+    c = cirq.merge_single_qubit_gates_to_phxz(circuit)
+    return pack_earliest(cirq.drop_empty_moments(cirq.drop_negligible_operations(c)))
+
+
+def pack_earliest(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Re-insert every operation at the earliest moment its qubits allow (mixed 1q/CZ moments)."""
+    return cirq.Circuit(circuit.all_operations(), strategy=cirq.InsertStrategy.EARLIEST)
+
+
+# =============================================================================================
+# Calibration costs and layout search
+# =============================================================================================
 
 
 def _robust(v) -> float:
@@ -44,6 +250,12 @@ def _robust(v) -> float:
         return float(v)
 
 
+def _readout(q, zero_errors, one_errors, robust: bool = True) -> tuple:
+    """(0 -> 1, 1 -> 0) readout errors of q, robust or raw means; missing entries count as 0.5."""
+    e0, e1 = zero_errors.get(q, (0.5, 0)), one_errors.get(q, (0.5, 0))
+    return (_robust(e0), _robust(e1)) if robust else (e0[0], e1[0])
+
+
 def _usable_graph(cz_pauli_error_rate: dict, sq_pauli_error_rate: dict) -> nx.Graph:
     """Calibrated couplers whose endpoints both have single-qubit calibrations."""
     g = nx.Graph()
@@ -57,9 +269,21 @@ def _usable_graph(cz_pauli_error_rate: dict, sq_pauli_error_rate: dict) -> nx.Gr
 def _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, p_one: float, n_sq: float = 1) -> float:
     """Expected per-qubit error: readout weighted by how often the qubit reads 1, plus
     `n_sq` single-qubit gates."""
-    e0 = _robust(zero_errors.get(q, (0.5, 0)))
-    e1 = _robust(one_errors.get(q, (0.5, 0)))
+    e0, e1 = _readout(q, zero_errors, one_errors)
     return (1 - p_one) * e0 + p_one * e1 + n_sq * _robust(sq_pauli_error_rate[q])
+
+
+def _imbalance_penalty(qubits: list, n: int, cost: float, zero_errors, one_errors) -> float:
+    """log(1 + lambda / (K - 1)) for the chi^2 noncentrality lambda caused by readout alone,
+    at right-weight fraction f = exp(-cost). A valid string x survives readout with relative
+    weight ~ exp(-sum_{i in x} (e1_i - e0_i)), so its spread over random n-subsets is
+    n (N-n)/(N-1) var(e1 - e0)."""
+    N = len(qubits)
+    if N < 2:
+        return 0.0
+    d = np.array([e1 - e0 for e0, e1 in (_readout(q, zero_errors, one_errors, robust=False) for q in qubits)])
+    lam = 1e4 * math.exp(-cost) * n * (N - n) / (N - 1) * float(np.var(d))
+    return math.log1p(lam / max(math.comb(N, n) - 1, 1))
 
 
 def _best_path(g: nx.Graph, length: int, node_cost: dict, beam: int = 256,
@@ -104,25 +328,18 @@ def _connected_patch(g: nx.Graph, size: int, node_cost: dict) -> list | None:
     return None
 
 
+# =============================================================================================
+# Our constructions
+# =============================================================================================
+
 # ---- W state (n = 1): broadcast tree of amplitude splits ------------------------------
 
 # Idle-error model for layout decisions. The calibration data has no T1/T2, so we use
 # the Willow spec-sheet T1 (68 us) and an assumed T_phi (100 us). One tree round is
-# 2 CZ layers (42 ns) + 2 single-qubit layers (25 ns). A W state carries exactly one
-# excitation in every branch, so its idle loss per round is independent of N.
-_ROUND_NS = 2 * 42 + 2 * 25
+# 2 CZ layers + 2 single-qubit layers. A W state carries exactly one excitation in every
+# branch, so its idle loss per round is independent of N.
+_ROUND_NS = round((2 * T_CZ + 2 * T_1Q) * 1e9)
 _IDLE_RATE_PER_NS = 1 / 68e3 + 1 / 100e3
-
-
-def _readout_lambda(qubits: list, zero_errors, one_errors, n: int, f: float) -> float:
-    """Chi^2 noncentrality from readout alone: a valid string x survives readout with
-    relative weight ~ exp(-sum_{i in x} (e1_i - e0_i)), so its spread over random
-    n-subsets is n (N-n)/(N-1) var(e1 - e0)."""
-    N = len(qubits)
-    if N < 2:
-        return 0.0
-    d = np.array([one_errors.get(q, (0.5, 0))[0] - zero_errors.get(q, (0.5, 0))[0] for q in qubits])
-    return 1e4 * f * n * (N - n) / (N - 1) * float(np.var(d))
 
 
 def _grow_tree(g: nx.Graph, root, N: int, node_cost: dict):
@@ -183,8 +400,7 @@ def _best_w_tree(g, N, node_cost, zero_errors, one_errors):
             if rounds is None:
                 continue
             cost += len(rounds) * _ROUND_NS * _IDLE_RATE_PER_NS
-            lam = _readout_lambda(list(S), zero_errors, one_errors, 1, math.exp(-cost))
-            cost += math.log1p(lam / (N - 1))
+            cost += _imbalance_penalty(list(S), 1, cost, zero_errors, one_errors)
             if cost < best_cost:
                 best, best_cost = (root, rounds), cost
     return best
@@ -226,7 +442,7 @@ def _w_tree_circuit(root, rounds: list) -> cirq.Circuit:
 # afford to simulate every placement exactly (gate depolarizing + readout, from the
 # calibration dicts) and pick the one with the highest predicted E[score].
 
-_PAULIS = [np.array(m, dtype=complex) for m in ([[0, 1], [1, 0]], [[0, -1j], [1j, 0]], [[1, 0], [0, -1]])]
+_PAULIS = [_MX, _MY, _MZ]
 
 
 def _embed(mats: dict, N: int) -> np.ndarray:
@@ -278,6 +494,8 @@ def _expected_score(K: int, f: float, lam: float, x: float, exact: bool) -> floa
 
 
 def _predict_tiny(steps, phys, n, cz_err, sq_err, zero_errors, one_errors, exact, shots=10_000):
+    """Predicted E[score] of one placement: exact density-matrix simulation with depolarizing
+    gate noise and readout confusion, then the judges' Z and X terms."""
     N = len(phys)
     rho = np.zeros((2**N, 2**N), dtype=complex)
     rho[0, 0] = 1
@@ -292,7 +510,7 @@ def _predict_tiny(steps, phys, n, cz_err, sq_err, zero_errors, one_errors, exact
     for r in (rho, h @ rho @ h):
         pr = np.real(np.diag(r)).reshape((2,) * N)
         for j, q in enumerate(phys):  # readout confusion, [read, true]
-            e0, e1 = _robust(zero_errors.get(q, (0.5, 0))), _robust(one_errors.get(q, (0.5, 0)))
+            e0, e1 = _readout(q, zero_errors, one_errors)
             conf = np.array([[1 - e0, e1], [e0, 1 - e1]])
             pr = np.moveaxis(np.tensordot(conf, pr, axes=([1], [j])), 0, j)
         probs.append(pr.reshape(-1))
@@ -332,6 +550,7 @@ def _tiny_candidates(g: nx.Graph, N: int):
 
 
 def _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors):
+    """Rank every placement by the fast closed form, then re-rank the top 10 exactly."""
     cz_err = {frozenset(p): _robust(v) for p, v in cz_pauli_error_rate.items()}
     sq_err = {q: _robust(v) for q, v in sq_pauli_error_rate.items()}
     programs, scored = {}, []
@@ -351,7 +570,100 @@ def _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate, zero_e
     return compiled.transform_qubits(lambda q: mapping[q]), set(best[2])
 
 
-# ---- Baertschi-Eidenbenz logical circuit ------------------------------------------------
+# ---- small cases: numerically synthesized exact circuits ----------------------------------
+#
+# For small (N, k) we embed exact Ry + CZ circuits found offline by experiments/synth.py
+# (gradient optimization to infidelity < 1e-13, then greedy CZ pruning), stored in _SYNTH at
+# the end of this file. They depend only on a layout shape (grid coordinates), never on
+# calibration data; where to put the shape is decided here at build time. Synthesis itself
+# takes minutes per case, far over the 60 s build budget, which is why the result is cached.
+
+_GRID_SYMMETRIES = (
+    lambda r, c: (r, c), lambda r, c: (r, -c), lambda r, c: (-r, c), lambda r, c: (-r, -c),
+    lambda r, c: (c, r), lambda r, c: (c, -r), lambda r, c: (-c, r), lambda r, c: (-c, -r),
+)
+
+
+def _place_synth(g, entry, n, sq_pauli_error_rate, zero_errors, one_errors):
+    """Best placement of a synthesized shape on calibrated qubits and couplers."""
+    coords = entry["coords"]
+    N = len(coords)
+    th = np.array(entry["params"]).reshape(-1, N)
+    ry_count = (np.abs(np.sin(th / 2)) > 1e-9).sum(axis=0)  # non-trivial rotations per qubit
+    uses = {}
+    for layer in entry["cz_layers"]:
+        for e in layer:
+            uses[tuple(e)] = uses.get(tuple(e), 0) + 1
+    usable = set(g.nodes)
+    best, best_cost = None, math.inf
+    for sym in _GRID_SYMMETRIES:
+        pts = [sym(r, c) for r, c in coords]
+        r0, c0 = pts[0]
+        for anchor in usable:
+            qs = [cirq.GridQubit(anchor.row + r - r0, anchor.col + c - c0) for r, c in pts]
+            if not all(q in usable for q in qs) or not all(g.has_edge(qs[i], qs[j]) for i, j in uses):
+                continue
+            cost = sum(u * g.edges[qs[i], qs[j]]["err"] for (i, j), u in uses.items())
+            cost += sum(
+                _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N, n_sq=ry_count[i])
+                for i, q in enumerate(qs)
+            )
+            cost += _imbalance_penalty(qs, n, cost, zero_errors, one_errors)
+            if cost < best_cost:
+                best, best_cost = qs, cost
+    return best
+
+
+def _synth_circuit(entry, qs) -> cirq.Circuit:
+    N = len(qs)
+    th = np.array(entry["params"]).reshape(-1, N)
+    moments = []
+    for l in range(len(th)):
+        moments.append(cirq.Moment(cirq.ry(th[l, i]).on(qs[i]) for i in range(N)))
+        if l < len(entry["cz_layers"]):
+            moments.append(cirq.Moment(cirq.CZ(qs[i], qs[j]) for i, j in entry["cz_layers"][l]))
+    return cirq.Circuit(moments)
+
+
+# ---- larger cases: B-E from synthesized nearest-neighbour SCS blocks ----------------------
+#
+# SCS_{m,k} acts on the k+1 consecutive line qubits m-k .. m, and its input is always a
+# sorted string |0^{w-l} 1^l> on that window. experiments/scs_synth.py finds exact Ry + CZ
+# circuits for these small isometries on a path (_SCS, end of file), so the whole B-E circuit
+# becomes nearest-neighbour on a line: no routing. Keys are (m, k, all_ones); all_ones marks
+# the second-group blocks SCS_{m,m-1}, m <= K, whose window can hold |1^m>.
+
+
+def _scs_blocks(N: int, K: int) -> list[tuple[int, int, bool]]:
+    return [(m, K, False) for m in range(N, K, -1)] + [(m, m - 1, True) for m in range(K, 1, -1)]
+
+
+def _scs_cz_count(N: int, K: int) -> int | None:
+    keys = _scs_blocks(N, K)
+    if not all(key in _SCS for key in keys):
+        return None
+    return sum(sum(map(len, _SCS[key][0])) for key in keys)
+
+
+def _scs_circuit(N: int, K: int, path: list) -> cirq.Circuit:
+    """U_{N,K} |0^{N-K} 1^K> = |D^N_K> on `path` (path[0] is B-E qubit 1).
+
+    Operations are appended in order with cirq's EARLIEST insertion, so consecutive
+    blocks overlap in time wherever their qubits allow (the paper's "pushed stairs").
+    """
+    ops = [cirq.X(q) for q in path[N - K:]]
+    for m, k, all_ones in _scs_blocks(N, K):
+        layers, params = _SCS[(m, k, all_ones)]
+        window = path[m - k - 1:m]
+        th = np.array(params).reshape(-1, k + 1)
+        for l in range(len(th)):
+            ops += [cirq.ry(th[l, i]).on(window[i]) for i in range(k + 1)]
+            if l < len(layers):
+                ops += [cirq.CZ(window[i], window[j]) for i, j in layers[l]]
+    return cirq.Circuit(ops)
+
+
+# ---- last resort: Baertschi-Eidenbenz logical circuit, routed ------------------------------
 
 
 def _ccry(phi: float, c1, c2, t) -> list:
@@ -392,61 +704,666 @@ def _bartschi_eidenbenz(N: int, k: int) -> tuple[cirq.Circuit, list]:
     return cirq.Circuit(ops), q
 
 
-# ---- small cases: numerically synthesized exact circuits ----------------------------------
-#
-# For small (N, k) we embed exact Ry + CZ circuits found offline by experiments/synth.py
-# (gradient optimization to infidelity < 1e-13, then greedy CZ pruning). They depend only
-# on a layout shape (grid coordinates), never on calibration data; the calibration-dependent
-# part, where to put the shape, is decided below at build time. Synthesis itself takes
-# minutes per case, far over the 60 s build budget, which is why the result is cached here.
+def _routed_bartschi_eidenbenz(g, N: int, k: int, flip: bool, node_cost: dict):
+    """B-E routed with cirq.RouteCQC onto a low-error path (or a connected patch).
 
-_GRID_SYMMETRIES = (
-    lambda r, c: (r, c), lambda r, c: (r, -c), lambda r, c: (-r, c), lambda r, c: (-r, -c),
-    lambda r, c: (c, r), lambda r, c: (c, -r), lambda r, c: (-c, r), lambda r, c: (-c, -r),
-)
+    Routing is chaotic: routing the raw CNOT/CRy circuit or a CZ-compiled one wins on
+    different calibrations (by up to ~30% CZ). Try both while time allows; keep the
+    one with fewer CZs. The raw variant goes first because it is the faster one.
+    """
+    layout = _best_path(g, N, node_cost) or _connected_patch(g, N, node_cost)
+    if layout is None:
+        raise NotImplementedError("no connected layout of the requested size")
+    logical, lq = _bartschi_eidenbenz(N, k)
+    if flip:
+        logical.append(cirq.X.on_each(*lq))
+    device = g.subgraph(layout).copy()
+    start = time.monotonic()
+    best = None
+    for precompile in (False, True):
+        if best is not None and time.monotonic() - start > _SECOND_TRY_BUDGET_S:
+            break
+        router = cirq.RouteCQC(device)
+        initial = cirq.HardCodedInitialMapper(dict(zip(lq, layout)))
+        source = _to_cz_phxz(logical) if precompile else logical
+        routed, initial_map, swap_map = router.route_circuit(source, initial_mapper=initial)
+        circuit = _to_cz_phxz(routed)
+        key = (sum(op.gate == cirq.CZ for op in circuit.all_operations()), len(circuit))
+        if best is None or key < best[0]:
+            best = (key, circuit, {swap_map[initial_map[q]] for q in lq})
+    return best[1], best[2]
 
 
-def _place_synth(g, entry, n, sq_pauli_error_rate, zero_errors, one_errors):
-    """Best placement of a synthesized shape on calibrated qubits and couplers."""
-    coords = entry["coords"]
-    N = len(coords)
-    th = np.array(entry["params"]).reshape(-1, N)
-    ry_count = (np.abs(np.sin(th / 2)) > 1e-9).sum(axis=0)  # non-trivial rotations per qubit
-    uses = {}
-    for layer in entry["cz_layers"]:
-        for e in layer:
-            uses[tuple(e)] = uses.get(tuple(e), 0) + 1
-    usable = set(g.nodes)
-    best, best_cost = None, math.inf
-    for sym in _GRID_SYMMETRIES:
-        pts = [sym(r, c) for r, c in coords]
-        r0, c0 = pts[0]
-        for anchor in usable:
-            qs = [cirq.GridQubit(anchor.row + r - r0, anchor.col + c - c0) for r, c in pts]
-            if not all(q in usable for q in qs) or not all(g.has_edge(qs[i], qs[j]) for i, j in uses):
+# ---- compilation and dynamical decoupling --------------------------------------------------
+
+
+def _to_cz_phxz(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Compile to cirq.CZ + PhasedXZGate and drop global phases."""
+    # CZTargetGateset already merges single-qubit runs into PhasedXZ and drops negligible ops
+    c = cirq.optimize_for_target_gateset(circuit, gateset=cirq.CZTargetGateset())
+    c = cirq.drop_empty_moments(cirq.Circuit(
+        cirq.Moment(op for op in m if not isinstance(op.gate, cirq.GlobalPhaseGate)) for m in c
+    ))
+    # hardware-friendly layering: every moment is either all CZ or all single-qubit
+    if any(any(op.gate == cirq.CZ for op in m) and any(len(op.qubits) == 1 for op in m) for m in c):
+        c = cirq.stratified_circuit(c, categories=[lambda op: op.gate == cirq.CZ])
+    return c
+
+
+def _is_virtual_z(op: cirq.Operation) -> bool:
+    if not isinstance(op.gate, cirq.PhasedXZGate):
+        return False
+    x = op.gate.x_exponent % 2
+    return min(x, 2 - x) < 1e-9
+
+
+# Minimum free single-qubit slots in an idle window before we echo it (XY4 needs 4).
+# In simulation, echoing every short window cost up to ~1% of the ceiling share (pulse error
+# with nothing to refocus in sub-0.3 us idles); long windows are where hardware dephasing
+# and ZZ crosstalk accumulate, so only those are protected.
+_DD_MIN_SLOTS = 4
+
+
+def _add_dd(circuit: cirq.Circuit) -> cirq.Circuit:
+    """Echo long idle windows of qubits that may be in superposition with X-Y-X-Y.
+
+    A qubit is protected from its first non-virtual single-qubit gate (before that it sits
+    in |0>, which dephasing cannot touch) to the end of the circuit, including the trailing
+    window before measurement. Pulses go only into single-qubit moments, and only windows
+    with >= _DD_MIN_SLOTS free slots are echoed. XYXY = -I, so the noiseless state is
+    unchanged up to a global phase.
+    """
+    moments = [list(m) for m in circuit]
+    one_q_layer = [all(len(op.qubits) == 1 for op in m) for m in circuit]
+    for q in sorted(circuit.all_qubits()):
+        busy = [any(q in op.qubits for op in m) for m in circuit]
+        active = [i for i, m in enumerate(circuit) for op in m
+                  if q in op.qubits and len(op.qubits) == 1 and not _is_virtual_z(op)]
+        if not active:
+            continue
+        i = active[0] + 1
+        while i < len(circuit):
+            if busy[i]:
+                i += 1
                 continue
-            cost = sum(u * g.edges[qs[i], qs[j]]["err"] for (i, j), u in uses.items())
-            cost += sum(
-                _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N, n_sq=ry_count[i])
-                for i, q in enumerate(qs)
-            )
-            lam = _readout_lambda(qs, zero_errors, one_errors, n, math.exp(-cost))
-            cost += math.log1p(lam / max(math.comb(N, n) - 1, 1))
-            if cost < best_cost:
-                best, best_cost = qs, cost
-    return best
+            j = i
+            while j < len(circuit) and not busy[j]:
+                j += 1
+            slots = [t for t in range(i, j) if one_q_layer[t]]
+            seq = [_X, _Y, _X, _Y] if len(slots) >= _DD_MIN_SLOTS else []
+            for s, gate in enumerate(seq):  # evenly spaced over the window
+                moments[slots[round((s + 0.5) * len(slots) / len(seq) - 0.5)]].append(gate.on(q))
+            i = j
+    return cirq.Circuit(cirq.Moment(m) for m in moments)
 
 
-def _synth_circuit(entry, qs) -> cirq.Circuit:
-    N = len(qs)
-    th = np.array(entry["params"]).reshape(-1, N)
+# =============================================================================================
+# Bryan's solution (origin/bryan @ b94cb62, dicke_solution.py), cleaned up without changing
+# any circuit it returns. build() dispatches to it where it measured better
+# (experiments/results/vs_bryan.csv). Derivations (a)-(f) of every block, and Sections 2.1
+# (W tree) and 2.3 (two-arm split), are in docs/bryan_constructions.md.
+#
+# A program is a list of instructions ('U', qubit, 2x2 matrix) and ('CZ', a, b);
+# compile_layers turns it into alternating PhasedXZ / CZ moments.
+# =============================================================================================
+
+
+def _RY(theta):
+    """R_y(theta) = exp(-i theta Y / 2): |0> -> cos(theta/2)|0> + sin(theta/2)|1>."""
+    c, s = math.cos(theta / 2), math.sin(theta / 2)
+    return np.array([[c, -s], [s, c]], dtype=complex)
+
+
+def _RX(theta):
+    """R_x(theta) = exp(-i theta X / 2)."""
+    c, s = math.cos(theta / 2), math.sin(theta / 2)
+    return np.array([[c, -1j * s], [-1j * s, c]], dtype=complex)
+
+
+def _RZ(theta):
+    """R_z(theta) = exp(-i theta Z / 2)."""
+    return np.diag([np.exp(-0.5j * theta), np.exp(0.5j * theta)])
+
+
+def _u(q, m):
+    return ('U', q, m)
+
+
+def _cz(a, b):
+    return ('CZ', a, b)
+
+
+def _x_all(qubits):
+    """Flip every qubit (complement trick); merged into the final 1q layer by the compiler."""
+    return [_u(q, _MX) for q in qubits]
+
+
+def _cnot(control, target):
+    """CNOT = H_t CZ H_t (one CZ, derivation (a))."""
+    return [_u(target, _H), _cz(control, target), _u(target, _H)]
+
+
+def _cry_on_zero(control, target, theta):
+    """Controlled-R_y(theta), valid when target = |0> whenever control = |1> (one CZ, derivation (b))."""
+    return [_u(target, _RY(-theta / 2)), _cz(control, target), _u(target, _RY(theta / 2))]
+
+
+def _split_angle(p):
+    """Angle theta with sin^2(theta/2) = p, i.e. R_y(theta)|0> has |1>-probability p."""
+    return 2 * math.asin(math.sqrt(min(max(p, 0.0), 1.0)))  # clamp tiny float overshoots
+
+
+def _transfer(src, dst, p):
+    """|1>_src|0>_dst -> sqrt(1-p)|10> + sqrt(p)|01>, |00> -> |00> (two CZs, derivation (c))."""
+    return _cry_on_zero(src, dst, _split_angle(p)) + _cnot(dst, src)  # rotate dst; clear src if dst took it
+
+
+def _givens(a, b, theta, middle_a=None):
+    """Givens rotation G(theta) on (a, b) with two CZs (derivation (d)).
+
+    `middle_a` optionally replaces the middle R_x(theta/2) on qubit a (used by the merged top block).
+    """
+    if middle_a is None:
+        middle_a = [_u(a, _RX(theta / 2))]  # the XX-part angle
+    ops = [_u(b, _S), _u(a, _RX(np.pi / 2)), _u(b, _RX(np.pi / 2))]  # W V: map XY-YX onto -(XX+ZZ)
+    ops += _cnot(a, b)  # CNOT conjugation turns X_a into X_a X_b and Z_b into Z_a Z_b ...
+    ops += middle_a + [_u(b, _RZ(theta / 2))]  # ... so these become exp(-i t XX/2) exp(-i t ZZ/2)
+    ops += _cnot(a, b)
+    ops += [_u(a, _RX(-np.pi / 2)), _u(b, _RX(-np.pi / 2)), _u(b, _S.conj().T)]  # undo W and V
+    return ops
+
+
+def _g3(c, a, b, theta):
+    """Moving-hole gate on (c, a, b): partial move a->b if c=0, full move if c=1.
+
+    Five CZs, derivation (e).
+    """
+    al = (theta + np.pi) / 4  # alpha in the derivation
+    be = (theta - np.pi) / 4  # beta in the derivation
+    ops = _cnot(a, b)  # afterwards b = 1 implies a = 0, enabling known-target rotations of a
+    ops += [_u(a, _RY(-al)), _cz(c, a), _u(a, _RY(-be)), _cz(b, a), _u(a, _RY(be)), _cz(c, a), _u(a, _RY(al))]
+    ops += _cnot(a, b)  # map |a=1,b=1> back to |a=1,b=0>, completing the excitation move
+    return ops
+
+
+def _top_block(a, b, c, p_top, p_next):
+    """Merged first two steps of an SCS sweep on a line a-b-c, four CZs (derivation (f)).
+
+    Domain {000, 001, 011} (qubit order a, b, c). The excitation on c moves to b with probability p_next
+    when the input is 001, and to a with probability p_top when the input is 011.
+    """
+    t2 = _split_angle(p_top)  # the 011 branch (landing site a)
+    t1 = _split_angle(p_next)  # the 001 branch (landing site b)
+    ops = _cry_on_zero(b, a, t2)  # step 1: only 011 has b = 1, and there a = 0
+    middle = [_u(b, _RX((t1 - np.pi) / 2)), _cz(a, b), _u(b, _RX(np.pi / 2))]  # step 2: Z_b iff a = 1
+    ops += _givens(b, c, t1, middle_a=middle)
+    ops += [_u(a, _S)]  # step 3: cancel the -i phase acquired by the a = 1 branch
+    return ops
+
+
+def _scs_ops(window, m, all_ones_possible):
+    """SCS_m on window = [p_k, ..., p_1, p_0] (p_0 = position m) as a nearest-neighbour sweep."""
+    k = len(window) - 1  # largest number of excitations handled
+    if k == 1:  # a single partial move = Givens rotation (it also fixes |11>)
+        return _givens(window[0], window[1], _split_angle((m - 1) / m))
+    ops = []
+    i = k  # current hole index: branch r = i has its hole at p_i
+    if not all_ones_possible:  # the merged top block needs p_k = 0 on every input
+        ops += _top_block(window[0], window[1], window[2], (m - k) / m, (m - k + 1) / m)  # branches k, k-1
+        i = k - 2
+    while i >= 1:  # remaining sweep steps, top to bottom
+        theta = _split_angle((m - i) / m)  # branch r = i moves its hole with probability (m-i)/m
+        if i == k:  # first step of an unmerged sweep: no "in transit" control yet
+            ops += _givens(window[0], window[1], theta)
+        else:  # (c, a, b) = (p_{i+1}, p_i, p_{i-1})
+            ops += _g3(window[k - i - 1], window[k - i], window[k - i + 1], theta)
+        i -= 1
+    return ops
+
+
+def dicke_unitary_ops(path, k):
+    """BE unitary on `path`: |0^{N-r} 1^r> (ones at the END of the list) -> |D^(N)_r>, every r <= k."""
+    N = len(path)
+    k = min(k, N)
+    ops = []
+    for m in range(N, 1, -1):  # decide positions N, N-1, ..., 2 (position 1 is then determined)
+        kk = min(k, m - 1)  # the window reaches back k sites, but not past position 1
+        ops += _scs_ops(list(path[m - 1 - kk: m]), m, all_ones_possible=(k >= m))
+    return ops
+
+
+def dicke_path_ops(path, k):
+    """|D^(N)_k> on a path: X on the last k sites, then the BE unitary."""
+    return [_u(q, _MX) for q in path[len(path) - k:]] + dicke_unitary_ops(path, k)
+
+
+def split_ops(left, right, k):
+    """Two-arm construction (Section 2.3).
+
+    left = [l_1, ..., l_a], right = [r_1, ..., r_b]; l_1 and r_1 are the arm heads.
+    Ladder requirement: l_{k+1-u} must neighbour r_u for every rung that is actually used.
+    """
+    a, b = len(left), len(right)
+    N = a + b
+    P = [math.comb(b, j) * math.comb(a, k - j) / math.comb(N, k) if (0 <= k - j <= a and j <= b) else 0.0
+         for j in range(k + 1)]  # hypergeometric law of j = number of excitations in the right arm
+    tail = [sum(P[u:]) for u in range(k + 2)]  # tail[u] = P(j >= u)
+    ops = []
+    for u in range(1, min(k, b) + 1):  # thermometer chain r_1 ... r_k
+        if tail[u] <= 1e-15:  # j >= u impossible: r_u and all later r's stay |0>
+            break
+        if u == 1:
+            ops.append(_u(right[0], _RY(_split_angle(tail[1]))))  # P(r_1 = 1) = P(j >= 1)
+        else:  # conditioned on the previous bit (known |0> target)
+            ops += _cry_on_zero(right[u - 2], right[u - 1], _split_angle(tail[u] / tail[u - 1]))
+    for u in range(1, k + 1):  # rung copies l_{k+1-u} = NOT r_u
+        v = k + 1 - u
+        if v > a:  # left arm too short: this left bit does not exist (then r_u is always 1)
+            continue
+        if u > b or tail[u] <= 1e-15:  # r_u is always 0, so l_v is always 1
+            ops.append(_u(left[v - 1], _MX))
+        elif tail[u] < 1 - 1e-15:  # r_u genuinely random: copy its complement across the rung
+            ops += _cnot(right[u - 1], left[v - 1]) + [_u(left[v - 1], _MX)]
+        # otherwise r_u is always 1 and l_v correctly stays |0>
+    ops += dicke_unitary_ops(list(reversed(right)), min(k, b))  # BE on each arm (head = last element);
+    ops += dicke_unitary_ops(list(reversed(left)), min(k, a))  # the two arms run in parallel
+    return ops
+
+
+def _subtree_sizes(root, children):
+    """Subtree sizes s(v) for a rooted tree given as {node: [children]}."""
+    order = [root]  # BFS order; the list grows while we iterate
+    for v in order:
+        order.extend(children.get(v, []))
+    size = {}
+    for v in reversed(order):
+        size[v] = 1 + sum(size[c] for c in children.get(v, []))
+    return size
+
+
+def w_tree_ops(root, children):
+    """|W_N> on a rooted tree with 2N-3 CZs (Section 2.1)."""
+    size = _subtree_sizes(root, children)
+    kids = children.get(root, [])
+    if not kids:  # |W_1> = |1>
+        return [_u(root, _MX)]
+    first = kids[0]  # served with the 1-CZ product-state split
+    p = size[first] / size[root]  # probability that the excitation goes to the first child's subtree
+    ops = [_u(root, _RY(_split_angle(1 - p)))]  # root = sqrt(p)|0> + sqrt(1-p)|1>
+    ops += _cnot(root, first) + [_u(first, _MX)]  # -> sqrt(p)|01> + sqrt(1-p)|10>
+    stack = [root]  # depth-first traversal keeps every qubit's instruction order valid
+    while stack:
+        v = stack.pop()  # current owner of an excitation
+        remaining = size[v] - (size[first] if v == root else 0)  # mass still owned by v
+        for c in children.get(v, []):
+            if v == root and c == first:  # already served by the 1-CZ split
+                continue
+            ops += _transfer(v, c, size[c] / remaining)  # hand child c its share
+            remaining -= size[c]
+        stack.extend(reversed(children.get(v, [])))
+    return ops
+
+
+def _tree_children(parent):
+    """{child: parent} -> {node: [children sorted by decreasing subtree height]}."""
+    children = {}
+    for v, u in parent.items():
+        children.setdefault(u, []).append(v)
+    height = {}
+
+    def h(v):
+        if v not in height:
+            height[v] = 1 + max((h(c) for c in children.get(v, [])), default=0)
+        return height[v]
+
+    for v in list(children):  # tallest first (critical path first), deterministic ties
+        children[v].sort(key=lambda c: (-h(c), str(c)))
+    return children
+
+
+# ---- compiler -------------------------------------------------------------------------------
+
+
+def _is_identity(u, atol=1e-9):
+    """True if u is the identity up to a global phase."""
+    phase = u[0, 0] if abs(u[0, 0]) > 0.5 else 1.0  # an identity-like matrix has |u00| ~ 1
+    return np.allclose(u / phase, _I2, atol=atol)
+
+
+def _phxz(q, u):
+    return cirq.PhasedXZGate.from_matrix(u).on(q)  # exact up to a global phase
+
+
+def compile_layers(ops, dd=True):
+    """Instruction list -> cirq.Circuit with alternating PhasedXZ / CZ moments (ALAP, optional DD).
+
+    Single-qubit matrices are merged per qubit between CZs. With dd, each idle window of a
+    qubit after its first CZ gets X, Y, X, Y, ... plus a final undo pulse, and the window's
+    real gate is merged into its last slot (between CZs) or its first slot (after the last CZ).
+    """
+    pending = {}  # qubit -> product of 1q matrices since its last CZ
+    last = {}  # qubit -> index of its most recent CZ node
+    nodes = []
+    for kind, a, b in ops:
+        if kind == 'U':
+            pending[a] = b @ pending.get(a, _I2)  # later gates act after earlier ones
+            continue
+        nodes.append({'qubits': (a, b),
+                      'pre': {a: pending.pop(a, None), b: pending.pop(b, None)},  # 1q gates right before it
+                      'preds': {last[q] for q in (a, b) if q in last},
+                      'succs': set()})
+        last[a] = last[b] = len(nodes) - 1
+    trailing = pending  # 1q gates after a qubit's last CZ (or the only gates of CZ-free qubits)
+    for i, nd in enumerate(nodes):
+        for p in nd['preds']:
+            nodes[p]['succs'].add(i)
+    asap = [0] * len(nodes)  # earliest CZ layer (1-based); program order is a topological order
+    for i, nd in enumerate(nodes):
+        asap[i] = 1 + max((asap[p] for p in nd['preds']), default=0)
+    depth = max(asap, default=0)
+    layer = [0] * len(nodes)  # ALAP layer: one before the earliest successor
+    for i in range(len(nodes) - 1, -1, -1):
+        layer[i] = min((layer[s] for s in nodes[i]['succs']), default=depth + 1) - 1
+    n_mom = 2 * depth + 1  # 1q, CZ, 1q, ..., CZ, 1q: CZ layer t is moment 2t-1
+    slots = [dict() for _ in range(n_mom)]  # 1q moments: qubit -> matrix
+    cz_moments = [[] for _ in range(n_mom)]
+    q_layers = {}  # qubit -> [(CZ layer, pre-gate)]
+    for i, nd in enumerate(nodes):
+        cz_moments[2 * layer[i] - 1].append(cirq.CZ(*nd['qubits']))
+        for q in nd['qubits']:
+            q_layers.setdefault(q, []).append((layer[i], nd['pre'][q]))
+    for q in set(q_layers) | set(trailing):
+        seq = sorted(q_layers.get(q, []), key=lambda t: t[0])
+        if not seq:  # no CZ: its only gate goes in the final moment (stay |0> as long as possible)
+            u = trailing.get(q)
+            if u is not None and not _is_identity(u):
+                slots[n_mom - 1][q] = u
+            continue
+        t0, u0 = seq[0]
+        if u0 is not None:  # gates before the first CZ (the qubit is |0> before them, so no DD there)
+            slots[2 * t0 - 2][q] = u0
+        windows = [(seq[j][0], seq[j + 1][0], seq[j + 1][1], 'mid') for j in range(len(seq) - 1)]
+        windows.append((seq[-1][0], depth + 1, trailing.get(q), 'tail'))
+        for t_a, t_b, u, kind in windows:
+            moms = [2 * t for t in range(t_a, t_b)]  # the window's 1q moments
+            u = _I2 if u is None else u  # net single-qubit operation required in this window
+            if not dd or len(moms) < 2:  # no idle CZ layer inside (or DD disabled)
+                if not _is_identity(u):  # just before the next CZ / just after the last CZ
+                    slots[moms[-1] if kind == 'mid' else moms[0]][q] = u
+                continue
+            pulses = [(_MX if i % 2 == 0 else _MY) for i in range(len(moms) - 1)]
+            acc = _I2
+            for p in pulses:
+                acc = p @ acc
+            pulses.append(acc.conj().T)  # the final slot undoes the product: window total = identity
+            if kind == 'mid':  # the real gate must act right before the next CZ
+                pulses[-1] = u @ pulses[-1]
+            else:  # tail window: apply the real gate first, then decouple
+                pulses[0] = pulses[0] @ u
+            for mom, p in zip(moms, pulses):
+                if not _is_identity(p):
+                    slots[mom][q] = p
     moments = []
-    for l in range(len(th)):
-        moments.append(cirq.Moment(cirq.ry(th[l, i]).on(qs[i]) for i in range(N)))
-        if l < len(entry["cz_layers"]):
-            moments.append(cirq.Moment(cirq.CZ(qs[i], qs[j]) for i, j in entry["cz_layers"][l]))
+    for i in range(n_mom):
+        ops_i = [_phxz(q, u) for q, u in slots[i].items()] if i % 2 == 0 else cz_moments[i]
+        if ops_i:
+            moments.append(cirq.Moment(ops_i))
     return cirq.Circuit(moments)
 
+
+# ---- calibration model and layout search ------------------------------------------------------
+
+T_IDLE = 60e-6  # nominal effective coherence time used to price idling (s)
+
+
+class Calibration:
+    """Pessimistic error rates and the usable coupling graph built from the four calibration dictionaries."""
+
+    def __init__(self, cz, sq, e0, e1, beta=1.0):
+        def pess(v):  # mean + beta * sigma, clipped so the logarithms stay finite
+            mean, std = v
+            return float(min(max(mean + beta * std, 1e-6), 0.5))
+
+        self.sq = {q: pess(v) for q, v in sq.items()}  # usable qubits = those with single-qubit data
+        med0 = float(np.median([v[0] for v in e0.values()])) if e0 else 0.01  # fallback readout errors
+        med1 = float(np.median([v[0] for v in e1.values()])) if e1 else 0.02
+        self.e0 = {q: pess(e0[q]) if q in e0 else med0 for q in self.sq}  # 0 -> 1 readout error
+        self.e1 = {q: pess(e1[q]) if q in e1 else med1 for q in self.sq}  # 1 -> 0 readout error
+        self.cz = {}  # frozenset pair -> CZ error, only couplers whose two qubits are usable
+        for pair, v in cz.items():
+            a, b = tuple(pair)
+            if a in self.sq and b in self.sq and a != b:
+                key = frozenset((a, b))
+                self.cz[key] = min(self.cz.get(key, 1.0), pess(v))  # keep the better value if listed twice
+        self.adj = {q: set() for q in self.sq}
+        for key in self.cz:
+            a, b = tuple(key)
+            self.adj[a].add(b)
+            self.adj[b].add(a)
+
+    def edge_cost(self, a, b):
+        """-log(1 - CZ error) for coupler (a, b)."""
+        return -math.log(1 - self.cz[frozenset((a, b))])
+
+    def ro_cost(self, q, p):
+        """-log(1 - readout error) for a qubit that is |1> with probability p."""
+        return -math.log(1 - ((1 - p) * self.e0[q] + p * self.e1[q]))
+
+    def sq_cost(self, q):
+        """-log(1 - single-qubit error)."""
+        return -math.log(1 - self.sq[q])
+
+
+def estimate_log_fidelity(circuit, cal, data_qubits, p_exc):
+    """Predicted log success probability of a compiled circuit: sum of log(1 - gate error),
+    minus each qubit's time from its first gate to measurement over T_IDLE, minus readout."""
+    total = 0.0
+    first = {}  # qubit -> index of its first moment
+    durations = []
+    for i, moment in enumerate(circuit):
+        is_cz = any(len(op.qubits) == 2 for op in moment)  # moments are homogeneous: CZ or 1q
+        durations.append(T_CZ if is_cz else T_1Q)
+        for op in moment:
+            for q in op.qubits:
+                first.setdefault(q, i)
+            if len(op.qubits) == 2:
+                total += math.log(1 - cal.cz[frozenset(op.qubits)])
+            else:
+                total += math.log(1 - cal.sq[op.qubits[0]])
+    cum = np.cumsum([0.0] + durations)  # time at each moment boundary
+    for q, i in first.items():
+        total -= (cum[-1] - cum[i]) / T_IDLE  # linearised decay
+    for q in data_qubits:
+        total -= cal.ro_cost(q, p_exc)
+    return total
+
+
+def _grow_paths(cal, beams, length, edge_w, node_w, p_exc, forbidden=(), beam=200):
+    """Beam search extending partial simple paths [(cost, path)] to `length` qubits, avoiding
+    `forbidden`. A qubit at position i costs node_w[i] 1q gates plus readout, and the edge into
+    it edge_w[i-1] CZs. Returns the beam, best first, or [] if no path can be extended."""
+    while len(beams[0][1]) < length:
+        pos = len(beams[0][1])
+        cand = {}  # dedupe partial paths by (qubit set, end)
+        for cost, path in beams:
+            u = path[-1]
+            for v in cal.adj[u]:
+                if v in path or v in forbidden:
+                    continue
+                c = (cost + edge_w[pos - 1] * cal.edge_cost(u, v) + node_w[pos] * cal.sq_cost(v)
+                     + cal.ro_cost(v, p_exc))
+                key = (frozenset(path) | {v}, v)
+                if key not in cand or cand[key][0] > c:
+                    cand[key] = (c, path + (v,))
+        beams = heapq.nsmallest(beam, cand.values(), key=lambda t: t[0])
+        if not beams:
+            return []
+    return beams
+
+
+def ladder_candidates(cal, k, p_exc, w_edge, w_node):
+    """All straight 2 x k ladders: right row r_1..r_k and a left row with l_{k+1-u} next to r_u."""
+    out = []  # (cost, left, right)
+    for q in sorted(cal.sq, key=str):  # r_1
+        for d in ((0, 1), (0, -1), (1, 0), (-1, 0)):  # direction of the right row
+            for s in ((d[1], d[0]), (-d[1], -d[0])):  # side on which the left row lies
+                right = [cirq.GridQubit(q.row + u * d[0], q.col + u * d[1]) for u in range(k)]
+                left = [cirq.GridQubit(r.row + s[0], r.col + s[1]) for r in reversed(right)]
+                if any(x not in cal.sq for x in right + left):
+                    continue
+                edges = (list(zip(right, right[1:])) + list(zip(left, left[1:]))
+                         + [(right[u], left[k - 1 - u]) for u in range(k)])  # rows + rungs
+                if any(frozenset(e) not in cal.cz for e in edges):
+                    continue
+                cost = (sum(w_edge * cal.edge_cost(*e) for e in edges)
+                        + sum(w_node * cal.sq_cost(x) + cal.ro_cost(x, p_exc) for x in right + left))
+                out.append((cost, left, right))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def path_profile(N, k):
+    """CZ count per edge and gate count per position of the BE construction (weights for the path search)."""
+    qs = cirq.LineQubit.range(N)
+    circ = compile_layers(dicke_path_ops(qs, k), dd=False)
+    pos = {q: i for i, q in enumerate(qs)}
+    edge_w = [0] * max(N - 1, 1)
+    node_w = [0] * N
+    for op in circ.all_operations():
+        if len(op.qubits) == 2:  # CZ (always nearest-neighbour)
+            edge_w[min(pos[q] for q in op.qubits)] += 1
+        else:
+            node_w[pos[op.qubits[0]]] += 1
+    return edge_w, node_w
+
+
+def generate_candidates(N, n, cal, *, dd=True, deadline=None, max_paths=10, max_ladders=12):
+    """Yield exact candidates (circuit, qubit_list, kind) for |D^(N)_n> on the calibrated device.
+
+    k = min(n, N - n) = 0 gives the product state; otherwise B-E on the best paths, then the
+    two-arm split construction on the best ladders. (W states, k = 1, never come here.)
+    """
+    deadline = deadline if deadline is not None else time.monotonic() + 30.0
+    k = min(n, N - n)
+    flip = n > N - n  # prepared the complement: append X everywhere
+    p_exc = n / N  # excitation probability of each Dicke qubit (for readout pricing)
+    if k == 0:
+        qs = sorted(cal.sq, key=lambda q: ((cal.e1[q] if flip else cal.e0[q]) + cal.sq[q], str(q)))[:N]
+        gate = cirq.PhasedXZGate(x_exponent=1 if flip else 0, z_exponent=0, axis_phase_exponent=0)
+        # an explicit (identity) gate keeps the qubits visible in the circuit
+        yield cirq.Circuit(cirq.Moment(gate.on(q) for q in qs)), qs, 'trivial'
+        return
+    edge_w, node_w = path_profile(N, k)
+    starts = [(node_w[0] * cal.sq_cost(q) + cal.ro_cost(q, p_exc), (q,)) for q in sorted(cal.sq, key=str)]
+    for _, path in _grow_paths(cal, starts, N, edge_w, node_w, p_exc)[:max_paths]:
+        ops = dicke_path_ops(list(path), k) + (_x_all(path) if flip else [])
+        yield compile_layers(ops, dd=dd), list(path), 'path'
+        if time.monotonic() > deadline:
+            return
+    a, b = N // 2, N - N // 2  # balanced arms (b >= a >= k because k <= N/2)
+    ew, nw = path_profile(b, k)
+    w_edge = sum(ew) / max(len(ew), 1)  # average CZs per arm edge
+    w_node = sum(nw) / max(len(nw), 1)  # average 1q gates per arm qubit
+    for _, left0, right0 in ladder_candidates(cal, k, p_exc, w_edge, w_node)[:max_ladders]:
+        used = set(left0) | set(right0)
+        rights = _grow_paths(cal, [(0.0, tuple(right0))], b, [w_edge] * b, [w_node] * b, p_exc, used, beam=30)
+        for _, right in rights[:2]:
+            lefts = _grow_paths(cal, [(0.0, tuple(left0))], a, [w_edge] * a, [w_node] * a, p_exc,
+                                used | set(right), beam=30)
+            for _, left in lefts[:1]:
+                qs = list(left) + list(right)
+                ops = split_ops(list(left), list(right), k) + (_x_all(qs) if flip else [])
+                yield compile_layers(ops, dd=dd), qs, 'split'
+        if time.monotonic() > deadline:
+            return
+
+
+# ---- Bryan's entry points ---------------------------------------------------------------------
+
+
+def _bryan_create_dicke_state(N, n, cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors):
+    """Hardware track: the candidate with the best predicted log-fidelity (30 s budget)."""
+    start = time.monotonic()
+    cal = Calibration(cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors)
+    if N > len(cal.sq):
+        raise NotImplementedError('not enough usable qubits')
+    best = None  # (predicted log-fidelity, circuit, qubits)
+    for circ, qs, _ in generate_candidates(N, n, cal, deadline=start + 30.0):
+        if len(circ) > 1750:  # would not be run on the hardware
+            continue
+        score = estimate_log_fidelity(circ, cal, qs, n / N)
+        if best is None or score > best[0]:
+            best = (score, circ, qs)
+    if best is None:
+        raise NotImplementedError('no embedding within the 1750-moment limit')
+    return best[1], set(best[2])
+
+
+def _ideal_calibration():
+    """Uniform costs on every Willow105 qubit and coupler (the bonus is noise-free). Unlike
+    _uniform_calibration, all rates are equal, as Bryan's bonus search was tuned with."""
+    device = cirq_google.Willow105
+    qubits = sorted(device.metadata.qubit_set)
+    cz = {tuple(sorted(p)): (1e-3, 0.0) for p in device.metadata.qubit_pairs}
+    flat = {q: (1e-3, 0.0) for q in qubits}
+    return Calibration(cz, flat, flat, flat, beta=0.0)
+
+
+def broadcast_tree(cal, root, N):
+    """Greedy round-by-round matching tree: each informed node recruits at most one neighbour per round."""
+    informed = [root]  # in order of recruitment
+    parent = {}  # child -> parent
+    center = (np.mean([q.row for q in cal.sq]), np.mean([q.col for q in cal.sq]))  # prefer central growth
+    while len(informed) < N:
+        taken = set()  # recruited this round
+        new = []  # (child, parent) pairs of this round
+        for u in list(informed):
+            options = [v for v in cal.adj[u] if v not in parent and v != root and v not in taken]
+            if not options or len(informed) + len(new) >= N:
+                continue
+            v = min(options, key=lambda q: (  # not a dead end, central, deterministic ties
+                len([w for w in cal.adj[q] if w not in parent and w != root]) == 0,
+                (q.row - center[0]) ** 2 + (q.col - center[1]) ** 2, str(q)))
+            taken.add(v)
+            new.append((v, u))
+        if not new:  # stuck (cannot happen on a connected device with N <= 105)
+            return None
+        for v, u in new:
+            parent[v] = u
+            informed.append(v)  # v can recruit from the next round on
+    return parent
+
+
+def _bryan_create_dicke_state_adaptive(N, n):
+    """Bonus track: the shallowest exact candidate on the ideal device (no measurements)."""
+    cal = _ideal_calibration()
+    k = min(n, N - n)
+    flip = n > N - n
+    cands = []  # (circuit, qubits)
+    if k == 1:  # W states: broadcast trees from every root
+        for r in sorted(cal.sq, key=str):
+            parent = broadcast_tree(cal, r, N)
+            if parent is None:
+                continue
+            qs = [r, *parent]
+            ops = w_tree_ops(r, _tree_children(parent)) + (_x_all(qs) if flip else [])
+            cands.append((compile_layers(ops, dd=False), qs))
+    else:  # reuse the hardware candidate generator on the ideal device; few candidates suffice
+        for circ, qs, _ in generate_candidates(N, n, cal, dd=False, max_paths=2, max_ladders=3):
+            cands.append((circ, qs))
+    if not cands:
+        raise NotImplementedError('no embedding found')
+    best = None  # (depth, circuit, qubits)
+    for circ, qs in cands:
+        for c in (circ, pack_earliest(circ)):  # layered and packed versions
+            if best is None or len(c) < best[0]:
+                best = (len(c), c, qs)
+    return best[1], set(best[2])
+
+
+# =============================================================================================
+# Data: synthesized exact circuits (rewritten by the export scripts between the markers)
+# =============================================================================================
 
 # BEGIN SYNTH TABLE (generated by experiments/synth.py --export; do not edit)
 _SYNTH = {
@@ -497,45 +1414,6 @@ _SYNTH = {
     ),
 }
 # END SYNTH TABLE
-
-
-# ---- larger cases: B-E from synthesized nearest-neighbour SCS blocks ----------------------
-#
-# SCS_{m,k} acts on the k+1 consecutive line qubits m-k .. m, and its input is always a
-# sorted string |0^{w-l} 1^l> on that window. experiments/scs_synth.py finds exact Ry + CZ
-# circuits for these small isometries on a path, so the whole B-E circuit becomes
-# nearest-neighbour on a line: no routing. Keys are (m, k, all_ones); all_ones marks the
-# second-group blocks SCS_{m,m-1}, m <= K, whose window can hold |1^m>.
-
-
-def _scs_blocks(N: int, K: int) -> list[tuple[int, int, bool]]:
-    return [(m, K, False) for m in range(N, K, -1)] + [(m, m - 1, True) for m in range(K, 1, -1)]
-
-
-def _scs_cz_count(N: int, K: int) -> int | None:
-    keys = _scs_blocks(N, K)
-    if not all(key in _SCS for key in keys):
-        return None
-    return sum(sum(map(len, _SCS[key][0])) for key in keys)
-
-
-def _scs_circuit(N: int, K: int, path: list) -> cirq.Circuit:
-    """U_{N,K} |0^{N-K} 1^K> = |D^N_K> on `path` (path[0] is B-E qubit 1).
-
-    Operations are appended in order with cirq's EARLIEST insertion, so consecutive
-    blocks overlap in time wherever their qubits allow (the paper's "pushed stairs").
-    """
-    ops = [cirq.X(q) for q in path[N - K:]]
-    for m, k, all_ones in _scs_blocks(N, K):
-        layers, params = _SCS[(m, k, all_ones)]
-        window = path[m - k - 1:m]
-        th = np.array(params).reshape(-1, k + 1)
-        for l in range(len(th)):
-            ops += [cirq.ry(th[l, i]).on(window[i]) for i in range(k + 1)]
-            if l < len(layers):
-                ops += [cirq.CZ(window[i], window[j]) for i, j in layers[l]]
-    return cirq.Circuit(ops)
-
 
 # BEGIN SCS TABLE (generated by experiments/scs_synth.py --export; do not edit)
 _SCS = {  # (m, k, all_ones): (cz_layers, ry_params)
@@ -631,953 +1509,3 @@ _SCS = {  # (m, k, all_ones): (cz_layers, ry_params)
     (20, 5, False): ([[(0, 1), (2, 3), (4, 5)], [(1, 2)], [(0, 1), (4, 5)], [(1, 2), (3, 4)], [(4, 5)], [(3, 4)], [(2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(0, 1), (2, 3)], [(3, 4)], [(0, 1), (2, 3), (4, 5)], [(1, 2), (3, 4)], [(2, 3), (4, 5)]], [2.0943951094654607, 3.1415925532643842, -3.1415927548457048, 3.141592169891693, -1.5707951533478952, 1.5707775707924474, -2.704606508247201, -4.712389063011616, -4.712389025720749, -2.5270122039296568, -1.522424838878677, 2.8950002528630843, -1.4841836906301817, 3.605239194590624, 0.0621774774842041, 3.199518524971668, 1.296911440744896, 3.1626716505405903, -1.3360712805961485, 1.57079739974409, 1.0449712500074602, 0.8982872843983549, 1.5707918452051257, -1.5012673196863027, 1.8632288691401448, -4.712389007951291, -2.407063638660775, 2.064260830966303, 3.7661155558258166, -0.06951076170951609, 0.7067352949914016, -1.5802352921394138, -2.2641948926099675, -0.4934621967445474, 0.946273447797361, -0.5437004636604581, -0.4830843595584481, 0.5307047639105209, -1.6119174693173264, 4.712386179928758, 2.1953191988622973, 3.6852927691422, -2.28175777237506, -2.092062120670162, 5.4977870512636935, 5.497787234677558, -2.517069741129078, 2.90084282513934, -1.610644103865743, -3.141594162525163, -3.340442401618678, 2.555044129957265, 2.7397273562735086e-07, 0.24074980373876703, -3.324181670499133, -3.14159415275473, -1.5707507319716514, -1.5707952709567052, -3.141593156110166, 1.536188774866976, -2.8803876710867997, 0.0687445070370974, 4.712388812771856, -1.5708000012947811, 2.4915014480111943, 1.6028164089774306, -1.67945306365034, -3.1415920506021218, -0.25307006162703277, -0.1988496677248504, -0.9207046514333892, 2.325228709215539, -1.4621401729606118, -3.141592212669618, 2.808114324174802, 3.0294899710136937e-07, -1.5707963249783183, 2.3897476408540843, 1.227789537257534, 0.06874346180540658, 3.14159434490389, -4.712388987055188, 2.7272508672623742e-08, -3.1879966391795413, -1.619431200597835, 5.613310771880372e-09, 1.5707476930260773, 1.5707965558109644, -1.5707963359608785, -1.5243923506680774, -5.970159570518078, 3.1415927004588333, 3.141595119377687, -3.1415929557096884, 4.7123890322108295, -1.5707928669140505]),
 }
 # END SCS TABLE
-
-
-# ---- compilation helpers -----------------------------------------------------------------
-
-
-def _to_cz_phxz(circuit: cirq.Circuit) -> cirq.Circuit:
-    """Compile to cirq.CZ + PhasedXZGate and drop global phases."""
-    # CZTargetGateset already merges single-qubit runs into PhasedXZ and drops negligible ops
-    c = cirq.optimize_for_target_gateset(circuit, gateset=cirq.CZTargetGateset())
-    c = cirq.drop_empty_moments(cirq.Circuit(
-        cirq.Moment(op for op in m if not isinstance(op.gate, cirq.GlobalPhaseGate)) for m in c
-    ))
-    # hardware-friendly layering: every moment is either all CZ or all single-qubit
-    if any(any(op.gate == cirq.CZ for op in m) and any(len(op.qubits) == 1 for op in m) for m in c):
-        c = cirq.stratified_circuit(c, categories=[lambda op: op.gate == cirq.CZ])
-    return c
-
-
-# ---- dynamical decoupling --------------------------------------------------------------------
-
-_X = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0)
-_Y = cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0.5)
-
-
-def _is_virtual_z(op: cirq.Operation) -> bool:
-    if not isinstance(op.gate, cirq.PhasedXZGate):
-        return False
-    x = op.gate.x_exponent % 2
-    return min(x, 2 - x) < 1e-9
-
-
-# Minimum free single-qubit slots in an idle window before we echo it (XY4 needs 4).
-# In simulation, echoing every short window cost up to ~1% of the ceiling share (pulse error
-# with nothing to refocus in sub-0.3 us idles); long windows are where hardware dephasing
-# and ZZ crosstalk accumulate, so only those are protected.
-_DD_MIN_SLOTS = 4
-
-
-def _add_dd(circuit: cirq.Circuit) -> cirq.Circuit:
-    """Echo long idle windows of qubits that may be in superposition with X-Y-X-Y.
-
-    A qubit is protected from its first non-virtual single-qubit gate (before that it sits
-    in |0>, which dephasing cannot touch) to the end of the circuit, including the trailing
-    window before measurement. Pulses go only into single-qubit moments, and only windows
-    with >= _DD_MIN_SLOTS free slots are echoed. XYXY = -I, so the noiseless state is
-    unchanged up to a global phase.
-    """
-    moments = [list(m) for m in circuit]
-    one_q_layer = [all(len(op.qubits) == 1 for op in m) for m in circuit]
-    for q in sorted(circuit.all_qubits()):
-        busy = [any(q in op.qubits for op in m) for m in circuit]
-        active = [i for i, m in enumerate(circuit) for op in m
-                  if q in op.qubits and len(op.qubits) == 1 and not _is_virtual_z(op)]
-        if not active:
-            continue
-        i = active[0] + 1
-        while i < len(circuit):
-            if busy[i]:
-                i += 1
-                continue
-            j = i
-            while j < len(circuit) and not busy[j]:
-                j += 1
-            slots = [t for t in range(i, j) if one_q_layer[t]]
-            seq = [_X, _Y, _X, _Y] if len(slots) >= _DD_MIN_SLOTS else []
-            for s, gate in enumerate(seq):  # evenly spaced over the window
-                moments[slots[round((s + 0.5) * len(slots) / len(seq) - 0.5)]].append(gate.on(q))
-            i = j
-    return cirq.Circuit(cirq.Moment(m) for m in moments)
-
-
-# ---- entry point ------------------------------------------------------------------------
-
-
-def create_dicke_state(
-    num_qubits: int,
-    num_excitations: int,
-    cz_pauli_error_rate: dict[
-        tuple[cirq.GridQubit, cirq.GridQubit], tuple[float, float]
-    ],
-    sq_pauli_error_rate: dict[cirq.GridQubit, tuple[float, float]],
-    zero_errors: dict[cirq.GridQubit, tuple[float, float]],
-    one_errors: dict[cirq.GridQubit, tuple[float, float]],
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    """Create a Cirq circuit that produces a Dicke state.
-
-    Args:
-        num_qubits: The number, N, of qubits in the Dicke state.
-        num_excitations: The number, n, of 1s in the state.
-        cz_pauli_error_rate: Measured CZ Pauli error rates and their statistical uncertainties.
-        sq_pauli_error_rate: Measured single-qubit Pauli error rates and their statistical uncertainties.
-        zero_errors: Measured parallel 0 -> 1 readout error rates and their statistical uncertainties.
-        one_errors: Measured 1 -> 0 readout error rates and their statistical uncertainties.
-
-    Returns:
-        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
-
-    Raises:
-        NotImplementedError: The requested (N, n) combination is not implemented.
-    """
-    return build(
-        num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
-        zero_errors, one_errors,
-    )
-
-
-def build(
-    num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
-    zero_errors, one_errors, *, w_tree: bool = True, synth: bool = True,
-    scs: bool = True, tiny: bool = True, dd: bool = True, bryan: bool = True,
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    """`create_dicke_state` with switches for the experiments (defaults = submission)."""
-    if bryan and _bryan_wins(int(num_qubits), int(num_excitations)):
-        try:
-            return _bryan_create_dicke_state(
-                int(num_qubits), int(num_excitations), cz_pauli_error_rate,
-                sq_pauli_error_rate, zero_errors, one_errors,
-            )
-        except Exception:  # any failure there: fall back to our constructions below
-            pass
-    circuit, qubits = _build_core(
-        num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
-        zero_errors, one_errors, w_tree=w_tree, synth=synth, scs=scs, tiny=tiny,
-    )
-    return (_add_dd(circuit) if dd else circuit), qubits
-
-
-def _bryan_wins(N: int, n: int) -> bool:
-    """Where the vendored constructions measured better (experiments/results/vs_bryan.csv,
-    25 cases x 3 calibrations, idle noise): k = 2 for N >= 6 (1-7% higher median score; ~3
-    fewer CZ) and k >= 3 for N >= 9 (21-39%; the split B-E halves the CZ count). Ours win the
-    W states, k = 2 up to N = 5 and k >= 3 up to N = 8 (whole-state synthesis, up to +28%)."""
-    if N < 1 or not 0 <= n <= N:
-        return False
-    k = min(n, N - n)
-    return (k == 2 and N >= 6) or (k >= 3 and N >= 9)
-
-
-def _build_core(
-    num_qubits, num_excitations, cz_pauli_error_rate, sq_pauli_error_rate,
-    zero_errors, one_errors, *, w_tree: bool, synth: bool, scs: bool, tiny: bool,
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    N, n = int(num_qubits), int(num_excitations)
-    if N < 1 or not 0 <= n <= N:
-        raise NotImplementedError(f"invalid (N, n) = ({N}, {n})")
-    flip = n > N - n  # D^N_n = X^N D^N_{N-n}: prepare the lighter one
-    k = N - n if flip else n
-    node_cost = {
-        q: _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N)
-        for q in sq_pauli_error_rate
-    }
-
-    if k == 0:  # product state: |0...0> or |1...1>
-        qubits = sorted(node_cost, key=node_cost.get)[:N]
-        if len(qubits) < N:
-            raise NotImplementedError("not enough calibrated qubits")
-        ops = [cirq.PhasedXZGate(x_exponent=1, z_exponent=0, axis_phase_exponent=0).on(q) for q in qubits] if flip else []
-        return cirq.Circuit(ops), set(qubits)
-
-    g = _usable_graph(cz_pauli_error_rate, sq_pauli_error_rate)
-
-    # Measured (experiments/results/tiny.csv): for W2 this raises E[score] 60.2 -> 65.6 while
-    # the median dips 4.37 -> 4.16; for W3 it gains nothing, so only N = 2 uses it.
-    if k == 1 and w_tree and tiny and N == 2:
-        picked = _best_tiny_w(g, N, n, flip, cz_pauli_error_rate, sq_pauli_error_rate,
-                              zero_errors, one_errors)
-        if picked is not None:
-            return picked
-
-    if k == 1 and w_tree:
-        tree_cost = {  # a tree node receives ~4 non-virtual single-qubit gates
-            q: _qubit_cost(q, sq_pauli_error_rate, zero_errors, one_errors, n / N, n_sq=4)
-            for q in sq_pauli_error_rate
-        }
-        tree = _best_w_tree(g, N, tree_cost, zero_errors, one_errors)
-        if tree is not None:
-            root, rounds = tree
-            logical = _w_tree_circuit(root, rounds)
-            qubits = {root} | {c for r in rounds for _, c in r}
-            if flip:
-                logical.append(cirq.X.on_each(*sorted(qubits)))
-            return _to_cz_phxz(logical), qubits
-
-    scs_cz = _scs_cz_count(N, k) if scs else None
-    synth_entry = _SYNTH.get((N, k)) if synth else None
-    if synth_entry is not None and (scs_cz is None or sum(map(len, synth_entry["cz_layers"])) <= scs_cz):
-        qs = _place_synth(g, synth_entry, n, sq_pauli_error_rate, zero_errors, one_errors)
-        if qs is not None:
-            logical = _synth_circuit(synth_entry, qs)
-            if flip:
-                logical.append(cirq.X.on_each(*qs))
-            return _to_cz_phxz(logical), set(qs)
-
-    if scs_cz is not None:
-        paths = _best_path(g, N, node_cost, edge_weight=scs_cz / (N - 1), keep=16)
-        if paths:
-            K = math.comb(N, n)
-
-            def total(cost_path):
-                cost, path = cost_path
-                lam = _readout_lambda(path, zero_errors, one_errors, n, math.exp(-cost))
-                return cost + math.log1p(lam / (K - 1))
-
-            path = min(paths, key=total)[1]
-            logical = _scs_circuit(N, k, path)
-            if flip:
-                logical.append(cirq.X.on_each(*path))
-            return _to_cz_phxz(logical), set(path)
-
-    layout = _best_path(g, N, node_cost) or _connected_patch(g, N, node_cost)
-    if layout is None:
-        raise NotImplementedError("no connected layout of the requested size")
-
-    logical, lq = _bartschi_eidenbenz(N, k)
-    if flip:
-        logical.append(cirq.X.on_each(*lq))
-
-    # Routing is chaotic: routing the raw CNOT/CRy circuit or a CZ-compiled one wins on
-    # different calibrations (by up to ~30% CZ). Try both while time allows; keep the
-    # one with fewer CZs. The raw variant goes first because it is the faster one.
-    device = g.subgraph(layout).copy()
-    start = time.monotonic()
-    best = None
-    for precompile in (False, True):
-        if best is not None and time.monotonic() - start > _SECOND_TRY_BUDGET_S:
-            break
-        router = cirq.RouteCQC(device)
-        initial = cirq.HardCodedInitialMapper(dict(zip(lq, layout)))
-        source = _to_cz_phxz(logical) if precompile else logical
-        routed, initial_map, swap_map = router.route_circuit(source, initial_mapper=initial)
-        circuit = _to_cz_phxz(routed)
-        key = (sum(op.gate == cirq.CZ for op in circuit.all_operations()), len(circuit))
-        if best is None or key < best[0]:
-            best = (key, circuit, {swap_map[initial_map[q]] for q in lq})
-    return best[1], best[2]
-
-
-# ---- bonus track ------------------------------------------------------------------------------
-
-
-def _uniform_calibration() -> dict:
-    """The bonus provides no error rates: every Willow105 qubit and coupler, equal rates."""
-    qubits = sorted(cirq_google.Willow105.metadata.qubit_set)
-    pairs = [tuple(sorted(p)) for p in cirq_google.Willow105.metadata.qubit_pairs]
-    return dict(
-        cz_pauli_error_rate={p: (2.5e-3, 0.0) for p in pairs},
-        sq_pauli_error_rate={q: (4e-4, 0.0) for q in qubits},
-        zero_errors={q: (5e-3, 0.0) for q in qubits},
-        one_errors={q: (1e-2, 0.0) for q in qubits},
-    )
-
-
-def _pack(circuit: cirq.Circuit) -> cirq.Circuit:
-    """Fewest moments: merge single-qubit runs, then re-insert every operation as early as
-    possible (single-qubit gates may share a moment with CZs; depth is all that is scored)."""
-    c = cirq.merge_single_qubit_gates_to_phxz(circuit)
-    c = cirq.drop_empty_moments(cirq.drop_negligible_operations(c))
-    return cirq.Circuit(c.all_operations())
-
-
-def create_dicke_state_adaptive(
-    num_qubits: int, num_excitations: int
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    """Create a Cirq circuit that produces a Dicke state, allowing for adaptive circuits.
-
-    This entry is not adaptive yet: it returns the shallower of our exact unitary
-    construction (uniform calibration, packed for depth) and the vendored bonus solution.
-    Every measurement branch is trivially exact because there are no measurements.
-
-    Args:
-        num_qubits: The number, N, of qubits in the Dicke state.
-        num_excitations: The number, n, of 1s in the state.
-
-    Returns:
-        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
-
-    Raises:
-        NotImplementedError: The requested (N, n) combination is not implemented.
-    """
-    cal = _uniform_calibration()
-    ours, qs = build(num_qubits, num_excitations, **cal, dd=False, bryan=False)
-    best = (_pack(ours), qs)
-    try:  # the vendored bonus solution is shallower for most cases: keep whichever is shallower
-        theirs = _bryan_create_dicke_state_adaptive(int(num_qubits), int(num_excitations))
-        if len(theirs[0]) < len(best[0]):
-            best = theirs
-    except NotImplementedError:
-        pass
-    return best
-
-
-# =============================================================================================
-# Vendored: Bryan's solution (origin/bryan @ b94cb62, dicke_solution.py), verbatim except that
-# its imports moved to the top of this file and four names were renamed to avoid collisions:
-# _X -> _BRYAN_X, _Y -> _BRYAN_Y, create_dicke_state -> _bryan_create_dicke_state,
-# create_dicke_state_adaptive -> _bryan_create_dicke_state_adaptive.
-# build() dispatches to it where it measured better (experiments/results/vs_bryan.csv).
-# Its explanatory notebook cells (derivations of every block) are in docs/bryan_constructions.md.
-# =============================================================================================
-
-
-_I2 = np.eye(2, dtype=complex)  # identity
-_BRYAN_X = np.array([[0, 1], [1, 0]], dtype=complex)  # Pauli X
-_BRYAN_Y = np.array([[0, -1j], [1j, 0]], dtype=complex)  # Pauli Y
-_H = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)  # Hadamard
-_S = np.diag([1, 1j]).astype(complex)  # phase gate S = sqrt(Z)
-
-
-def _RY(theta):
-    """R_y(theta) = exp(-i theta Y / 2): real rotation, |0> -> cos(theta/2)|0> + sin(theta/2)|1>."""
-    c, s = math.cos(theta / 2), math.sin(theta / 2)  # half-angle cosine and sine
-    return np.array([[c, -s], [s, c]], dtype=complex)  # standard real rotation matrix
-
-
-def _RX(theta):
-    """R_x(theta) = exp(-i theta X / 2)."""
-    c, s = math.cos(theta / 2), math.sin(theta / 2)  # half-angle cosine and sine
-    return np.array([[c, -1j * s], [-1j * s, c]], dtype=complex)  # rotation about the X axis
-
-
-def _RZ(theta):
-    """R_z(theta) = exp(-i theta Z / 2)."""
-    return np.diag([np.exp(-0.5j * theta), np.exp(0.5j * theta)])  # diagonal phase rotation
-
-
-def _u(q, m):
-    """Instruction: apply the 2x2 unitary m to qubit q."""
-    return ('U', q, m)  # tuples are cheap; matrices are merged later
-
-
-def _cz(a, b):
-    """Instruction: CZ between qubits a and b (symmetric)."""
-    return ('CZ', a, b)  # the only two-qubit gate we ever emit
-
-
-def _cnot(control, target):
-    """CNOT = H_t CZ H_t (one CZ, derivation (a))."""
-    return [_u(target, _H), _cz(control, target), _u(target, _H)]  # HZH = X on the target
-
-
-def _cry_on_zero(control, target, theta):
-    """Controlled-R_y(theta), valid when target = |0> whenever control = |1> (one CZ, derivation (b))."""
-    return [_u(target, _RY(-theta / 2)), _cz(control, target), _u(target, _RY(theta / 2))]  # R_y(t/2) CZ R_y(-t/2)
-
-
-def _split_angle(p):
-    """Angle theta with sin^2(theta/2) = p, i.e. R_y(theta)|0> has |1>-probability p."""
-    return 2 * math.asin(math.sqrt(min(max(p, 0.0), 1.0)))  # clamping guards tiny float overshoots
-
-
-def _transfer(src, dst, p):
-    """|1>_src|0>_dst -> sqrt(1-p)|10> + sqrt(p)|01>, |00> -> |00> (two CZs, derivation (c))."""
-    return _cry_on_zero(src, dst, _split_angle(p)) + _cnot(dst, src)  # rotate dst, then clear src if dst took it
-
-
-def _givens(a, b, theta, middle_a=None):
-    """Givens rotation G(theta) on (a, b) with two CZs (derivation (d)).
-
-    `middle_a` optionally replaces the middle R_x(theta/2) on qubit a (used by the merged top block).
-    """
-    if middle_a is None:  # plain Givens rotation
-        middle_a = [_u(a, _RX(theta / 2))]  # the XX-part angle
-    ops = [_u(b, _S), _u(a, _RX(np.pi / 2)), _u(b, _RX(np.pi / 2))]  # W V: map XY-YX onto -(XX+ZZ)
-    ops += _cnot(a, b)  # CNOT conjugation turns X_a into X_a X_b and Z_b into Z_a Z_b ...
-    ops += middle_a + [_u(b, _RZ(theta / 2))]  # ... so these rotations become exp(-i t XX/2) exp(-i t ZZ/2)
-    ops += _cnot(a, b)  # close the CNOT conjugation
-    ops += [_u(a, _RX(-np.pi / 2)), _u(b, _RX(-np.pi / 2)), _u(b, _S.conj().T)]  # undo W and V
-    return ops
-
-
-def _g3(c, a, b, theta):
-    """Moving-hole gate on (c, a, b): partial move a->b if c=0, full move if c=1 (five CZs, derivation (e))."""
-    al = (theta + np.pi) / 4  # alpha in the derivation
-    be = (theta - np.pi) / 4  # beta in the derivation
-    ops = _cnot(a, b)  # afterwards b = 1 implies a = 0, enabling known-target rotations of a
-    ops += [_u(a, _RY(-al)), _cz(c, a), _u(a, _RY(-be)), _cz(b, a), _u(a, _RY(be)), _cz(c, a), _u(a, _RY(al))]  # M
-    ops += _cnot(a, b)  # map |a=1,b=1> back to |a=1,b=0>, completing the excitation move
-    return ops
-
-
-def _top_block(a, b, c, p_top, p_next):
-    """Merged first two steps of an SCS sweep on a line a-b-c, four CZs (derivation (f)).
-
-    Domain {000, 001, 011} (qubit order a, b, c). The excitation on c moves to b with probability p_next
-    when the input is 001, and to a with probability p_top when the input is 011.
-    """
-    t2 = _split_angle(p_top)  # rotation for the 011 branch (landing site a)
-    t1 = _split_angle(p_next)  # rotation for the 001 branch (landing site b)
-    ops = _cry_on_zero(b, a, t2)  # step 1: only 011 has b = 1, and there a = 0
-    middle = [_u(b, _RX((t1 - np.pi) / 2)), _cz(a, b), _u(b, _RX(np.pi / 2))]  # step 2: Z_b inserted iff a = 1
-    ops += _givens(b, c, t1, middle_a=middle)  # Givens on (b, c) with the modified middle layer
-    ops += [_u(a, _S)]  # step 3: cancel the -i phase acquired by the a = 1 branch
-    return ops
-
-
-def _scs_ops(window, m, all_ones_possible):
-    """SCS_m on window = [p_k, ..., p_1, p_0] (p_0 = position m) as a nearest-neighbour sweep."""
-    k = len(window) - 1  # window size minus one = largest number of excitations handled
-    if k == 1:  # a single partial move = Givens rotation (it also fixes |11>)
-        return _givens(window[0], window[1], _split_angle((m - 1) / m))  # move the hole with probability (m-1)/m
-    ops = []  # accumulated instructions
-    i = k  # current hole index: branch r = i has its hole at p_i
-    if not all_ones_possible:  # the merged top block needs p_k = 0 on every input
-        ops += _top_block(window[0], window[1], window[2], (m - k) / m, (m - k + 1) / m)  # branches r = k and k-1
-        i = k - 2  # the block already performed the top two sweep steps
-    while i >= 1:  # remaining sweep steps, top to bottom
-        theta = _split_angle((m - i) / m)  # branch r = i moves its hole with probability (m-i)/m
-        if i == k:  # very first step of an unmerged sweep: no "in transit" control yet
-            ops += _givens(window[0], window[1], theta)  # partial move p_k <-> p_{k-1}
-        else:  # generic step: the control is the site above the hole position
-            ops += _g3(window[k - i - 1], window[k - i], window[k - i + 1], theta)  # (c, a, b) = (p_{i+1}, p_i, p_{i-1})
-        i -= 1  # move one site towards the head p_0
-    return ops
-
-
-def dicke_unitary_ops(path, k):
-    """BE unitary on `path`: maps |0^{N-r} 1^r> (ones at the END of the list) to |D^(N)_r> for every r <= k."""
-    N = len(path)  # number of positions
-    k = min(k, N)  # cannot hold more excitations than qubits
-    ops = []  # accumulated instructions
-    for m in range(N, 1, -1):  # decide positions N, N-1, ..., 2 (position 1 is then determined)
-        kk = min(k, m - 1)  # the window reaches back k sites, but not past position 1
-        ops += _scs_ops(list(path[m - 1 - kk: m]), m, all_ones_possible=(k >= m))  # all-ones input reachable iff k >= m
-    return ops
-
-
-def dicke_path_ops(path, k):
-    """|D^(N)_k> on a path: X on the last k sites, then the BE unitary."""
-    return [_u(q, _BRYAN_X) for q in path[len(path) - k:]] + dicke_unitary_ops(path, k)  # |0^{N-k}1^k>, then U_N
-
-
-def split_ops(left, right, k):
-    """Two-arm construction (Section 2.3).
-
-    left = [l_1, ..., l_a], right = [r_1, ..., r_b]; l_1 and r_1 are the arm heads.
-    Ladder requirement: l_{k+1-u} must neighbour r_u for every rung that is actually used.
-    """
-    a, b = len(left), len(right)  # arm lengths
-    N = a + b  # total number of qubits
-    P = [math.comb(b, j) * math.comb(a, k - j) / math.comb(N, k) if (0 <= k - j <= a and j <= b) else 0.0
-         for j in range(k + 1)]  # hypergeometric law of j = number of excitations in the right arm
-    tail = [sum(P[u:]) for u in range(k + 2)]  # tail[u] = P(j >= u)
-    ops = []  # accumulated instructions
-    for u in range(1, min(k, b) + 1):  # thermometer chain r_1 ... r_k
-        if tail[u] <= 1e-15:  # j >= u impossible: r_u stays |0>, and so do all later r's
-            break  # nothing more to prepare
-        if u == 1:  # first bit from scratch
-            ops.append(_u(right[0], _RY(_split_angle(tail[1]))))  # P(r_1 = 1) = P(j >= 1)
-        else:  # later bits conditioned on the previous one (known |0> target)
-            ops += _cry_on_zero(right[u - 2], right[u - 1], _split_angle(tail[u] / tail[u - 1]))  # P(j>=u | j>=u-1)
-    for u in range(1, k + 1):  # rung copies l_{k+1-u} = NOT r_u
-        v = k + 1 - u  # left index paired with r_u
-        if v > a:  # left arm too short: this left bit does not exist (then r_u is always 1)
-            continue  # nothing to write
-        if u > b or tail[u] <= 1e-15:  # r_u is always 0, so l_v is always 1
-            ops.append(_u(left[v - 1], _BRYAN_X))  # deterministic bit, no CZ needed
-        elif tail[u] < 1 - 1e-15:  # r_u genuinely random: copy its complement across the rung
-            ops += _cnot(right[u - 1], left[v - 1]) + [_u(left[v - 1], _BRYAN_X)]  # l_v = 1 XOR r_u
-        # otherwise r_u is always 1 and l_v correctly stays |0>
-    ops += dicke_unitary_ops(list(reversed(right)), min(k, b))  # BE on the right arm (head r_1 = last element)
-    ops += dicke_unitary_ops(list(reversed(left)), min(k, a))  # BE on the left arm; runs in parallel
-    return ops
-
-
-def _subtree_sizes(root, children):
-    """Subtree sizes s(v) for a rooted tree given as {node: [children]}."""
-    order = [root]  # BFS order
-    for v in order:  # the list grows while we iterate
-        order.extend(children.get(v, []))  # append children
-    size = {}  # node -> subtree size
-    for v in reversed(order):  # leaves first
-        size[v] = 1 + sum(size[c] for c in children.get(v, []))  # itself plus its children's subtrees
-    return size
-
-
-def w_tree_ops(root, children):
-    """|W_N> on a rooted tree with 2N-3 CZs (Section 2.1)."""
-    size = _subtree_sizes(root, children)  # s(v)
-    kids = children.get(root, [])  # root's children in serving order
-    if not kids:  # single qubit: |W_1> = |1>
-        return [_u(root, _BRYAN_X)]  # just flip it
-    first = kids[0]  # first child, served with the 1-CZ product-state split
-    p = size[first] / size[root]  # probability that the excitation goes to the first child's subtree
-    ops = [_u(root, _RY(_split_angle(1 - p)))]  # root = sqrt(p)|0> + sqrt(1-p)|1>
-    ops += _cnot(root, first) + [_u(first, _BRYAN_X)]  # -> sqrt(p)|01> + sqrt(1-p)|10>
-    stack = [root]  # depth-first traversal keeps every qubit's instruction order valid
-    while stack:  # visit every node once
-        v = stack.pop()  # current owner of an excitation
-        remaining = size[v] - (size[first] if v == root else 0)  # mass still owned by v
-        for c in children.get(v, []):  # serve the children in order
-            if v == root and c == first:  # already served by the 1-CZ split
-                continue  # skip it
-            ops += _transfer(v, c, size[c] / remaining)  # hand child c its share
-            remaining -= size[c]  # v now owns less
-        stack.extend(reversed(children.get(v, [])))  # children then process their own subtrees
-    return ops
-
-
-def _is_identity(u, atol=1e-9):
-    """True if u is the identity up to a global phase."""
-    phase = u[0, 0] if abs(u[0, 0]) > 0.5 else 1.0  # an identity-like matrix has |u00| ~ 1
-    return np.allclose(u / phase, _I2, atol=atol)  # compare after removing the phase
-
-
-def _phxz(q, u):
-    """Native gate for an arbitrary single-qubit unitary."""
-    return cirq.PhasedXZGate.from_matrix(u).on(q)  # exact up to a global phase
-
-
-def compile_layers(ops, dd=True):
-    """Instruction list -> cirq.Circuit with alternating PhasedXZ / CZ moments (ALAP, optional DD)."""
-    pending = {}  # qubit -> product of 1q matrices since its last CZ
-    last = {}  # qubit -> index of its most recent CZ node
-    nodes = []  # CZ nodes: qubits, pre-gates, DAG edges
-    for kind, a, b in ops:  # walk the instructions in program order
-        if kind == 'U':  # single-qubit matrix b on qubit a
-            pending[a] = b @ pending.get(a, _I2)  # left-multiply: later gates act after earlier ones
-            continue  # nothing else to do
-        nodes.append({'qubits': (a, b),  # a CZ node
-                      'pre': {a: pending.pop(a, None), b: pending.pop(b, None)},  # 1q gates right before it
-                      'preds': {last[q] for q in (a, b) if q in last},  # CZs that must come first
-                      'succs': set()})  # filled below
-        last[a] = last[b] = len(nodes) - 1  # this CZ is now the latest on both qubits
-    trailing = pending  # 1q gates after a qubit's last CZ (or the only gates of CZ-free qubits)
-    for i, nd in enumerate(nodes):  # build successor lists
-        for p in nd['preds']:  # every predecessor ...
-            nodes[p]['succs'].add(i)  # ... points forward to i
-    asap = [0] * len(nodes)  # earliest CZ layer (1-based)
-    for i, nd in enumerate(nodes):  # program order is a topological order
-        asap[i] = 1 + max((asap[p] for p in nd['preds']), default=0)  # one after the latest predecessor
-    depth = max(asap, default=0)  # number of CZ layers
-    layer = [0] * len(nodes)  # ALAP layer
-    for i in range(len(nodes) - 1, -1, -1):  # reverse topological order
-        layer[i] = min((layer[s] for s in nodes[i]['succs']), default=depth + 1) - 1  # one before the earliest successor
-    n_mom = 2 * depth + 1  # moments: 1q, CZ, 1q, CZ, ..., 1q
-    slots = [dict() for _ in range(n_mom)]  # 1q moments: qubit -> matrix
-    cz_moments = [[] for _ in range(n_mom)]  # CZ moments
-    q_layers = {}  # qubit -> list of (CZ layer, pre-gate)
-    for i, nd in enumerate(nodes):  # place the CZs
-        cz_moments[2 * layer[i] - 1].append(cirq.CZ(*nd['qubits']))  # CZ layer t lives in moment 2t-1
-        for q in nd['qubits']:  # remember each qubit's timeline
-            q_layers.setdefault(q, []).append((layer[i], nd['pre'][q]))  # its pre-gate goes right before this CZ
-    for q in set(q_layers) | set(trailing):  # every qubit that appears
-        seq = sorted(q_layers.get(q, []), key=lambda t: t[0])  # its CZs in time order
-        if not seq:  # no CZ at all: put its only gate in the final 1q moment (stay |0> as long as possible)
-            u = trailing.get(q)  # its merged gate
-            if u is not None and not _is_identity(u):  # skip identities
-                slots[n_mom - 1][q] = u  # last moment
-            continue  # done with this qubit
-        t0, u0 = seq[0]  # first CZ of this qubit
-        if u0 is not None:  # gates before the first CZ (the qubit is |0> before them, so no DD there)
-            slots[2 * t0 - 2][q] = u0  # 1q moment right before CZ layer t0
-        windows = [(seq[j][0], seq[j + 1][0], seq[j + 1][1], 'mid') for j in range(len(seq) - 1)]  # between CZs
-        windows.append((seq[-1][0], depth + 1, trailing.get(q), 'tail'))  # after the last CZ, until the end
-        for t_a, t_b, u, kind in windows:  # each idle window of an active qubit
-            moms = [2 * t for t in range(t_a, t_b)]  # its 1q moments
-            u = _I2 if u is None else u  # net single-qubit operation required in this window
-            if not dd or len(moms) < 2:  # no idle CZ layer inside (or DD disabled)
-                if not _is_identity(u):  # only emit real gates
-                    slots[moms[-1] if kind == 'mid' else moms[0]][q] = u  # just before next CZ / just after last CZ
-                continue  # next window
-            pulses = [(_BRYAN_X if i % 2 == 0 else _BRYAN_Y) for i in range(len(moms) - 1)]  # X, Y, X, Y, ...
-            acc = _I2  # running product of the pulses
-            for p in pulses:  # accumulate
-                acc = p @ acc  # later pulses act after earlier ones
-            pulses.append(acc.conj().T)  # the final slot undoes the product: window total = identity
-            if kind == 'mid':  # the real gate must act right before the next CZ
-                pulses[-1] = u @ pulses[-1]  # merge it into the final slot
-            else:  # tail window: apply the real gate first, then decouple
-                pulses[0] = pulses[0] @ u  # merge it into the first slot
-            for mom, p in zip(moms, pulses):  # emit
-                if not _is_identity(p):  # identity slots stay empty
-                    slots[mom][q] = p  # one PhasedXZ per qubit per moment
-    moments = []  # assemble the circuit
-    for i in range(n_mom):  # in time order
-        ops_i = [_phxz(q, u) for q, u in slots[i].items()] if i % 2 == 0 else cz_moments[i]  # 1q or CZ moment
-        if ops_i:  # drop empty moments
-            moments.append(cirq.Moment(ops_i))  # one homogeneous moment
-    return cirq.Circuit(moments)  # final native circuit
-
-
-T_1Q = 25e-9  # duration of a single-qubit moment (s)
-T_CZ = 42e-9  # duration of a CZ moment (s)
-T_IDLE = 60e-6  # nominal effective coherence time used to price idling (s)
-
-
-class Calibration:
-    """Pessimistic error rates and the usable coupling graph built from the four calibration dictionaries."""
-
-    def __init__(self, cz, sq, e0, e1, beta=1.0):
-        def pess(v):  # mean + beta * sigma, clipped to a sane range
-            mean, std = v  # calibration tuple
-            return float(min(max(mean + beta * std, 1e-6), 0.5))  # keeps the logarithms finite
-
-        self.sq = {q: pess(v) for q, v in sq.items()}  # usable qubits = those with single-qubit data
-        med0 = float(np.median([v[0] for v in e0.values()])) if e0 else 0.01  # fallback 0->1 readout error
-        med1 = float(np.median([v[0] for v in e1.values()])) if e1 else 0.02  # fallback 1->0 readout error
-        self.e0 = {q: pess(e0[q]) if q in e0 else med0 for q in self.sq}  # 0 -> 1 readout error
-        self.e1 = {q: pess(e1[q]) if q in e1 else med1 for q in self.sq}  # 1 -> 0 readout error
-        self.cz = {}  # frozenset pair -> CZ error
-        for pair, v in cz.items():  # only couplers whose two qubits are usable
-            a, b = tuple(pair)  # unpack (tuple or frozenset)
-            if a in self.sq and b in self.sq and a != b:  # both ends usable
-                key = frozenset((a, b))  # orientation-free key
-                self.cz[key] = min(self.cz.get(key, 1.0), pess(v))  # keep the better value if listed twice
-        self.adj = {q: set() for q in self.sq}  # adjacency of the usable graph
-        for key in self.cz:  # fill it
-            a, b = tuple(key)  # endpoints
-            self.adj[a].add(b)  # undirected ...
-            self.adj[b].add(a)  # ... edge
-
-    def edge_cost(self, a, b):
-        """-log(1 - CZ error) for coupler (a, b)."""
-        return -math.log(1 - self.cz[frozenset((a, b))])  # additive cost
-
-    def ro_cost(self, q, p):
-        """-log(1 - readout error) for a qubit that is |1> with probability p."""
-        return -math.log(1 - ((1 - p) * self.e0[q] + p * self.e1[q]))  # mixture of both error types
-
-    def sq_cost(self, q):
-        """-log(1 - single-qubit error)."""
-        return -math.log(1 - self.sq[q])  # additive cost
-
-
-def estimate_log_fidelity(circuit, cal, data_qubits, p_exc):
-    """Predicted log success probability of a compiled circuit (see the formula above)."""
-    total = 0.0  # running log-fidelity
-    first = {}  # qubit -> index of its first moment
-    durations = []  # moment durations
-    for i, moment in enumerate(circuit):  # scan the moments
-        is_cz = any(len(op.qubits) == 2 for op in moment)  # moments are homogeneous: CZ or 1q
-        durations.append(T_CZ if is_cz else T_1Q)  # its duration
-        for op in moment:  # gate errors
-            for q in op.qubits:  # remember when each qubit becomes active
-                first.setdefault(q, i)  # first occurrence only
-            if len(op.qubits) == 2:  # CZ
-                total += math.log(1 - cal.cz[frozenset(op.qubits)])  # its error
-            else:  # PhasedXZ
-                total += math.log(1 - cal.sq[op.qubits[0]])  # its error
-    cum = np.cumsum([0.0] + durations)  # cumulative time at each moment boundary
-    for q, i in first.items():  # idling from the first gate until measurement
-        total -= (cum[-1] - cum[i]) / T_IDLE  # linearised decay
-    for q in data_qubits:  # readout
-        total -= cal.ro_cost(q, p_exc)  # its error
-    return total
-
-
-def _tree_children(parent):
-    """{child: parent} -> {node: [children sorted by decreasing subtree height]}."""
-    children = {}  # node -> children
-    for v, u in parent.items():  # invert the parent map
-        children.setdefault(u, []).append(v)  # u is v's parent
-    height = {}  # memoised subtree heights
-
-    def h(v):  # height of v's subtree
-        if v not in height:  # compute once
-            height[v] = 1 + max((h(c) for c in children.get(v, [])), default=0)  # 1 + tallest child
-        return height[v]  # cached value
-
-    for v in list(children):  # order every child list
-        children[v].sort(key=lambda c: (-h(c), str(c)))  # tallest first (critical path first), deterministic ties
-    return children
-
-
-def grow_tree(cal, root, N, p_exc, depth_weight):
-    """Prim-like greedy N-node tree from `root`; returns {child: parent} or None."""
-    in_tree = {root}  # nodes already in the tree
-    parent = {}  # child -> parent
-    depth = {root: 0}  # tree depth of each node
-    heap = []  # frontier edges keyed by cost
-
-    def push(u):  # add u's frontier edges
-        for v in cal.adj[u]:  # neighbours
-            if v not in in_tree:  # only new nodes
-                c = (2 * cal.edge_cost(u, v) + cal.ro_cost(v, p_exc) + 4 * cal.sq_cost(v)
-                     + depth_weight * (depth[u] + 1))  # 2 CZs + readout + ~4 1q gates + depth penalty
-                heapq.heappush(heap, (c, str(v), v, u))  # str(v) breaks ties deterministically
-
-    push(root)  # start from the root
-    while len(in_tree) < N and heap:  # grow until N nodes
-        _, _, v, u = heapq.heappop(heap)  # cheapest frontier edge
-        if v in in_tree:  # stale entry
-            continue  # skip
-        in_tree.add(v)  # accept v
-        parent[v] = u  # reached via u
-        depth[v] = depth[u] + 1  # one level deeper
-        push(v)  # extend the frontier
-    return parent if len(in_tree) == N else None  # None if the component is too small
-
-
-def beam_paths(cal, N, edge_w, node_w, p_exc, beam=200):
-    """Beam search for low-cost simple paths of N qubits with position-dependent weights."""
-    beams = [(node_w[0] * cal.sq_cost(q) + cal.ro_cost(q, p_exc), (q,)) for q in sorted(cal.sq, key=str)]  # all starts
-    for pos in range(1, N):  # append one position at a time
-        cand = {}  # dedupe partial paths by (qubit set, end)
-        for cost, path in beams:  # expand every beam
-            u = path[-1]  # current end
-            for v in cal.adj[u]:  # possible next qubit
-                if v in path:  # simple paths only
-                    continue  # skip
-                c = cost + edge_w[pos - 1] * cal.edge_cost(u, v) + node_w[pos] * cal.sq_cost(v) + cal.ro_cost(v, p_exc)  # new cost
-                key = (frozenset(path) | {v}, v)  # equivalent partial paths
-                if key not in cand or cand[key][0] > c:  # keep the best representative
-                    cand[key] = (c, path + (v,))  # extended path
-        beams = heapq.nsmallest(beam, cand.values(), key=lambda t: t[0])  # prune
-        if not beams:  # dead end everywhere
-            return []  # no path of this length
-    return beams  # sorted best-first
-
-
-def extend_path(cal, prefix, length, forbidden, p_exc, w_edge, w_node, beam=30):
-    """Beam-search continuations of `prefix` to `length` qubits avoiding `forbidden`."""
-    beams = [(0.0, tuple(prefix))]  # start from the prefix
-    while len(beams[0][1]) < length:  # until long enough
-        cand = {}  # dedupe
-        for cost, path in beams:  # expand
-            u = path[-1]  # current end
-            for v in cal.adj[u]:  # neighbours
-                if v in path or v in forbidden:  # keep the arms disjoint and simple
-                    continue  # skip
-                c = cost + w_edge * cal.edge_cost(u, v) + w_node * cal.sq_cost(v) + cal.ro_cost(v, p_exc)  # new cost
-                key = (frozenset(path) | {v}, v)  # equivalence class
-                if key not in cand or cand[key][0] > c:  # keep the best
-                    cand[key] = (c, path + (v,))  # extended path
-        beams = heapq.nsmallest(beam, cand.values(), key=lambda t: t[0])  # prune
-        if not beams:  # cannot extend
-            return []  # failure
-    return beams  # best-first continuations
-
-
-def ladder_candidates(cal, k, p_exc, w_edge, w_node):
-    """All straight 2 x k ladders: right row r_1..r_k and a left row with l_{k+1-u} next to r_u."""
-    out = []  # (cost, left_head, right_head)
-    for q in sorted(cal.sq, key=str):  # r_1
-        for d in ((0, 1), (0, -1), (1, 0), (-1, 0)):  # direction of the right row
-            for s in ((d[1], d[0]), (-d[1], -d[0])):  # side on which the left row lies
-                right = [cirq.GridQubit(q.row + u * d[0], q.col + u * d[1]) for u in range(k)]  # r_1..r_k
-                left = [cirq.GridQubit(r.row + s[0], r.col + s[1]) for r in reversed(right)]  # l_1..l_k (reversed)
-                if any(x not in cal.sq for x in right + left):  # all qubits must be usable
-                    continue  # skip
-                edges = (list(zip(right, right[1:])) + list(zip(left, left[1:]))
-                         + [(right[u], left[k - 1 - u]) for u in range(k)])  # rows + rungs
-                if any(frozenset(e) not in cal.cz for e in edges):  # all couplers must be usable
-                    continue  # skip
-                cost = (sum(w_edge * cal.edge_cost(*e) for e in edges)
-                        + sum(w_node * cal.sq_cost(x) + cal.ro_cost(x, p_exc) for x in right + left))  # proxy cost
-                out.append((cost, left, right))  # keep
-    out.sort(key=lambda t: t[0])  # cheapest first
-    return out
-
-
-def path_profile(N, k):
-    """CZ count per edge and gate count per position of the BE construction (weights for the path search)."""
-    qs = cirq.LineQubit.range(N)  # abstract line
-    circ = compile_layers(dicke_path_ops(qs, k), dd=False)  # compile once
-    pos = {q: i for i, q in enumerate(qs)}  # qubit -> position index
-    edge_w = [0] * max(N - 1, 1)  # CZs per edge
-    node_w = [0] * N  # 1q gates per position
-    for op in circ.all_operations():  # tally
-        if len(op.qubits) == 2:  # CZ (always nearest-neighbour)
-            edge_w[min(pos[q] for q in op.qubits)] += 1  # its edge index
-        else:  # PhasedXZ
-            node_w[pos[op.qubits[0]]] += 1  # its position
-    return edge_w, node_w
-
-
-def _x_all(qubits):
-    """Instructions flipping every qubit (complement trick)."""
-    return [_u(q, _BRYAN_X) for q in qubits]  # merged into the final 1q layer by the compiler
-
-
-def generate_candidates(N, n, cal, *, dd=True, deadline=None, max_trees=40, max_paths=10, max_ladders=12):
-    """Yield exact candidates (circuit, qubit_list, kind) for |D^(N)_n> on the calibrated device."""
-    deadline = deadline if deadline is not None else time.monotonic() + 30.0  # default budget
-    k = min(n, N - n)  # prepare the lighter of the two complementary states
-    flip = n > N - n  # append X everywhere afterwards if we prepared the complement
-    p_exc = n / N  # excitation probability of each Dicke qubit (for readout pricing)
-    if k == 0:  # computational basis state: no entanglement needed
-        qs = sorted(cal.sq, key=lambda q: ((cal.e1[q] if flip else cal.e0[q]) + cal.sq[q], str(q)))[:N]  # best readout
-        gate = cirq.PhasedXZGate(x_exponent=1 if flip else 0, z_exponent=0, axis_phase_exponent=0)  # X or identity
-        yield cirq.Circuit(cirq.Moment(gate.on(q) for q in qs)), qs, 'trivial'  # explicit gate keeps qubits visible
-        return  # only candidate
-    if k == 1:  # W-state trees
-        seen = set()  # avoid compiling duplicate trees
-        proxies = []  # (proxy cost, root name, root, parent map)
-        for w in (0.0, 0.01, 0.03):  # depth penalties: from pure quality to compact trees
-            for r in sorted(cal.sq, key=str):  # every root
-                parent = grow_tree(cal, r, N, p_exc, w)  # greedy tree
-                if parent is None:  # component too small
-                    continue  # skip
-                key = (r, frozenset(parent.items()))  # identity of the tree
-                if key in seen:  # duplicate
-                    continue  # skip
-                seen.add(key)  # remember it
-                cost = (sum(2 * cal.edge_cost(v, u) for v, u in parent.items())
-                        + sum(cal.ro_cost(q, p_exc) for q in [r, *parent]))  # cheap proxy: CZs + readout
-                proxies.append((cost, str(r), r, parent))  # keep
-        proxies.sort(key=lambda t: (t[0], t[1]))  # best proxies first
-        for _, _, r, parent in proxies[:max_trees]:  # compile the most promising trees
-            qs = [r, *parent]  # its qubits
-            ops = w_tree_ops(r, _tree_children(parent)) + (_x_all(qs) if flip else [])  # exact construction
-            yield compile_layers(ops, dd=dd), qs, 'tree'  # candidate
-            if time.monotonic() > deadline:  # out of time
-                return  # stop
-        return  # trees beat paths for k = 1 (same CZ count, logarithmic instead of linear depth)
-    edge_w, node_w = path_profile(N, k)  # per-position weights of the BE path
-    for _, path in beam_paths(cal, N, edge_w, node_w, p_exc)[:max_paths]:  # best paths
-        ops = dicke_path_ops(list(path), k) + (_x_all(path) if flip else [])  # exact construction
-        yield compile_layers(ops, dd=dd), list(path), 'path'  # candidate
-        if time.monotonic() > deadline:  # out of time
-            return  # stop
-    a, b = N // 2, N - N // 2  # balanced arms (b >= a >= k because k <= N/2)
-    ew, nw = path_profile(b, k)  # typical arm weights
-    w_edge = sum(ew) / max(len(ew), 1)  # average CZs per arm edge
-    w_node = sum(nw) / max(len(nw), 1)  # average 1q gates per arm qubit
-    for _, left0, right0 in ladder_candidates(cal, k, p_exc, w_edge, w_node)[:max_ladders]:  # best ladders
-        used = set(left0) | set(right0)  # ladder qubits
-        for _, right in extend_path(cal, right0, b, used, p_exc, w_edge, w_node)[:2]:  # right-arm options
-            for _, left in extend_path(cal, left0, a, used | set(right), p_exc, w_edge, w_node)[:1]:  # best left arm
-                qs = list(left) + list(right)  # all qubits
-                ops = split_ops(list(left), list(right), k) + (_x_all(qs) if flip else [])  # exact construction
-                yield compile_layers(ops, dd=dd), qs, 'split'  # candidate
-        if time.monotonic() > deadline:  # out of time
-            return  # stop
-
-
-def _bryan_create_dicke_state(
-    num_qubits: int,
-    num_excitations: int,
-    cz_pauli_error_rate: dict[
-        tuple[cirq.GridQubit, cirq.GridQubit], tuple[float, float]
-    ],
-    sq_pauli_error_rate: dict[cirq.GridQubit, tuple[float, float]],
-    zero_errors: dict[cirq.GridQubit, tuple[float, float]],
-    one_errors: dict[cirq.GridQubit, tuple[float, float]],
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    """Create a Cirq circuit that produces a Dicke state.
-
-    Args:
-        num_qubits: The number, N, of qubits in the Dicke state.
-        num_excitations: The number, n, of 1s in the state.
-        cz_pauli_error_rate: Measured CZ Pauli error rates and their statistical uncertainties.
-        sq_pauli_error_rate: Measured single-qubit Pauli error rates and their statistical uncertainties.
-        zero_errors: Measured parallel 0 -> 1 readout error rates and their statistical uncertainties.
-        one_errors: Measured 1 -> 0 readout error rates and their statistical uncertainties.
-
-    Returns:
-        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
-
-    Raises:
-        NotImplementedError: The requested (N, n) combination is not implemented.
-    """
-    start = time.monotonic()  # the challenge counts > 60 s as NotImplementedError
-    N, n = int(num_qubits), int(num_excitations)  # accept numpy integers too
-    if N < 1 or n < 0 or n > N:  # no such Dicke state
-        raise NotImplementedError(f'invalid (N, n) = ({N}, {n})')  # explicit refusal
-    cal = Calibration(cz_pauli_error_rate, sq_pauli_error_rate, zero_errors, one_errors)  # pessimistic model
-    if N > len(cal.sq):  # not enough working qubits
-        raise NotImplementedError('not enough usable qubits')  # cannot embed
-    best = None  # (predicted log-fidelity, circuit, qubits)
-    for circ, qs, _ in generate_candidates(N, n, cal, deadline=start + 30.0):  # exact candidates
-        if len(circ) > 1750:  # would not be run on the hardware
-            continue  # discard
-        score = estimate_log_fidelity(circ, cal, qs, n / N)  # predicted log success probability
-        if best is None or score > best[0]:  # keep the best
-            best = (score, circ, qs)  # new incumbent
-    if best is None:  # nothing embeddable / everything too deep
-        raise NotImplementedError('no embedding within the 1750-moment limit')  # explicit refusal
-    return best[1], set(best[2])  # circuit and the qubits that hold the state
-
-
-def _ideal_calibration():
-    """Uniform 'calibration' covering every Willow105 qubit and coupler (the bonus is noise-free)."""
-    device = cirq_google.Willow105  # the target device
-    qubits = sorted(device.metadata.qubit_set)  # all 105 qubits
-    cz = {tuple(sorted(p)): (1e-3, 0.0) for p in device.metadata.qubit_pairs}  # every coupler, equal cost
-    flat = {q: (1e-3, 0.0) for q in qubits}  # equal single-qubit and readout costs
-    return Calibration(cz, flat, flat, flat, beta=0.0)  # deterministic, uniform model
-
-
-def broadcast_tree(cal, root, N):
-    """Greedy round-by-round matching tree: every informed node recruits at most one new neighbour per round."""
-    informed = [root]  # informed nodes in order of recruitment
-    parent = {}  # child -> parent
-    center = (np.mean([q.row for q in cal.sq]), np.mean([q.col for q in cal.sq]))  # prefer central growth
-    while len(informed) < N:  # until N qubits hold the excitation
-        taken = set()  # qubits recruited this round
-        new = []  # (child, parent) pairs of this round
-        for u in list(informed):  # each informed node may recruit once
-            options = [v for v in cal.adj[u] if v not in parent and v != root and v not in taken]  # free neighbours
-            if not options or len(informed) + len(new) >= N:  # nothing to do / enough nodes
-                continue  # next node
-            v = min(options, key=lambda q: (len([w for w in cal.adj[q] if w not in parent and w != root]) == 0,
-                                            (q.row - center[0]) ** 2 + (q.col - center[1]) ** 2, str(q)))  # central, non-dead-end
-            taken.add(v)  # reserve it
-            new.append((v, u))  # recruit
-        if not new:  # stuck (cannot happen on a connected device with N <= 105)
-            return None  # give up on this root
-        for v, u in new:  # commit the round
-            parent[v] = u  # tree edge
-            informed.append(v)  # v can recruit from the next round on
-    return parent  # {child: parent}
-
-
-def pack_earliest(circuit):
-    """Re-insert every operation at the earliest moment allowed by its qubits (mixed 1q/CZ moments)."""
-    return cirq.Circuit(circuit.all_operations(), strategy=cirq.InsertStrategy.EARLIEST)  # cirq does the packing
-
-
-def _bryan_create_dicke_state_adaptive(
-    num_qubits: int, num_excitations: int
-) -> tuple[cirq.Circuit, set[cirq.GridQubit]]:
-    """Create a Cirq circuit that produces a Dicke state, allowing for adaptive circuits.
-
-    Args:
-        num_qubits: The number, N, of qubits in the Dicke state.
-        num_excitations: The number, n, of 1s in the state.
-
-    Returns:
-        A Cirq circuit to produce Dicke state and a set indicating which qubits the resulting state lives on.
-
-    Raises:
-        NotImplementedError: The requested (N, n) combination is not implemented.
-    """
-    N, n = int(num_qubits), int(num_excitations)  # accept numpy integers
-    if N < 1 or n < 0 or n > N or N > 105:  # impossible request
-        raise NotImplementedError(f'invalid (N, n) = ({N}, {n})')  # explicit refusal
-    cal = _ideal_calibration()  # all qubits, uniform costs
-    k = min(n, N - n)  # complement trick, as in the hardware solution
-    flip = n > N - n  # whether to flip everything at the end
-    cands = []  # (circuit, qubits)
-    if k == 1:  # W states: broadcast trees from every root
-        for r in sorted(cal.sq, key=str):  # every possible root
-            parent = broadcast_tree(cal, r, N)  # shallow tree
-            if parent is None:  # failed
-                continue  # skip
-            qs = [r, *parent]  # its qubits
-            ops = w_tree_ops(r, _tree_children(parent)) + (_x_all(qs) if flip else [])  # exact construction
-            cands.append((compile_layers(ops, dd=False), qs))  # no DD in a noise-free setting
-    else:  # k = 0 or k >= 2: reuse the hardware candidate generator on the ideal device
-        for circ, qs, _ in generate_candidates(N, n, cal, dd=False, max_trees=5, max_paths=2, max_ladders=3):  # few suffice
-            cands.append((circ, qs))  # keep
-    if not cands:  # nothing found
-        raise NotImplementedError('no embedding found')  # explicit refusal
-    best = None  # (depth, circuit, qubits)
-    for circ, qs in cands:  # pick the shallowest, trying both layouts
-        for c in (circ, pack_earliest(circ)):  # layered and packed versions
-            if best is None or len(c) < best[0]:  # strictly shallower
-                best = (len(c), c, qs)  # new incumbent
-    return best[1], set(best[2])  # circuit and data qubits
