@@ -1,0 +1,6 @@
+name: Willow Route Lab
+icon: ✨
+description: Explore noisy quantum routes on the UNO Q LED matrix.
+
+bricks:
+  - arduino:web_ui

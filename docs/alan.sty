@@ -1,0 +1,261 @@
+\ProvidesPackage{alan}
+
+%% Argument processing
+\newif\ifalanasy\alanasytrue
+\DeclareOption{noasy}{\alanasyfalse}
+\newif\ifalanhdr\alanhdrfalse
+\DeclareOption{hdr}{\alanhdrtrue}
+\newif\ifalanpkg\alanpkgtrue
+\DeclareOption{nopkg}{\alanpkgfalse}
+\newif\ifalanthm\alanthmtrue
+\DeclareOption{nothm}{\alanthmfalse}
+
+\ProcessOptions\relax
+
+\ifalanpkg\else\alanasyfalse\alanthmfalse\fi
+
+%% Useful packages
+\RequirePackage{amsmath,amssymb}
+\ifalanpkg
+  \RequirePackage{derivative}
+  \RequirePackage[shortlabels]{enumitem}
+  \RequirePackage{mathtools}
+  \RequirePackage{microtype}
+  \RequirePackage[minimal]{yhmath}
+
+  \RequirePackage[
+    colorlinks=true,
+    citecolor=ForestGreen,
+    linkcolor=RoyalBlue,
+    urlcolor=RubineRed,
+    pdfusetitle,
+    pdfkeywords=alan.sty
+  ]{hyperref}
+  \RequirePackage[nameinlink]{cleveref}
+\fi
+
+%% Misc
+\newenvironment{subproof}[1][Proof]{%
+  \begin{proof}[#1] \renewcommand{\qedsymbol}{$\blacksquare$}}%
+    {\end{proof}}
+
+%% Small commands
+\newcommand{\arc}[1]{\wideparen{#1}}
+\newcommand{\cbrt}[1]{\sqrt[3]{#1}}
+\newcommand{\dang}{\measuredangle} %% Directed angle
+\newcommand{\eps}{\varepsilon}
+\newcommand{\half}{\frac{1}{2}}
+\newcommand{\hrulebar}{\par\centerline{\rule{0.95\linewidth}{.7pt}}\medskip}
+\newcommand{\ii}{\item}
+\newcommand{\ol}{\overline}
+\newcommand{\rec}[1]{\frac{1}{#1}}
+\newcommand{\ts}{\textsuperscript}
+\newcommand{\ul}{\underline}
+\newcommand{\vocab}[1]{\textbf{\color{
+      blue}\sffamily #1}}
+\newcommand{\wh}{\widehat}
+
+%% Superscripts
+\newcommand{\dg}{^\circ}
+\newcommand{\inv}{^{-1}}
+
+\newcommand{\img}{^{\text{img}}}
+\newcommand{\pre}{^{\text{pre}}}
+
+%% Delimiters
+\newcommand{\floor}[1]{\left\lfloor #1 \right\rfloor}
+\newcommand{\ceil}[1]{\left\lceil #1 \right\rceil}
+
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+
+%% Math operators
+\DeclareMathOperator*{\lcm}{lcm}
+\DeclareMathOperator{\ord}{ord}
+\DeclareMathOperator{\Tr}{Tr}
+\DeclareMathOperator{\Gal}{Gal}
+\DeclareMathOperator{\Spec}{Spec}
+\renewcommand{\Re}{\operatorname{Re}}
+\renewcommand{\Im}{\operatorname{Im}}
+
+%% Blackboard letters
+\newcommand{\CC}{\mathbb C}
+\newcommand{\EE}{\mathbb E}
+\newcommand{\FF}{\mathbb F}
+\newcommand{\HH}{\mathbb H}
+\newcommand{\NN}{\mathbb N}
+\newcommand{\PP}{\mathbb P}
+\newcommand{\QQ}{\mathbb Q}
+\newcommand{\RR}{\mathbb R}
+\newcommand{\TT}{\mathbb T}
+\newcommand{\ZZ}{\mathbb Z}
+
+%% Inequalities
+\newcommand{\cycsum}{\sum_{\text{cyc}}}
+\newcommand{\symsum}{\sum_{\text{sym}}}
+\newcommand{\cycprod}{\prod_{\text{cyc}}}
+\newcommand{\symprod}{\prod_{\text{sym}}}
+
+%% KOMA specific
+\@ifundefined{KOMAClassName}{}{
+  %% Fancy section and paragraph titles
+  \renewcommand*{\sectionformat}
+  {\color{purple}\S\thesection\enskip}
+  \renewcommand*{\subsectionformat}
+  {\color{purple}\S\thesubsection\enskip}
+  \renewcommand*{\subsubsectionformat}
+  {\color{purple}\S\thesubsubsection\enskip}
+  \addtokomafont{paragraph}{\color{orange!35!black}\P\ }
+  \KOMAoptions{numbers=noenddot}
+
+  %% Fit more text
+  \addtolength{\textheight}{3.14cm}
+}
+
+\ifalanasy
+  \RequirePackage{asymptote}
+  \begin{asydef}
+    defaultpen(fontsize(10pt));
+    size(8cm); // set a reasonable default
+    usepackage("amsmath");
+    usepackage("amssymb");
+    settings.tex="pdflatex";
+    settings.outformat="pdf";
+
+    import geometry;
+    pair foot(pair P, pair A, pair B) { return foot(triangle(P, A, B).VA); }
+    pair IP(path p, path q) { return intersectionpoints(p, q)[0]; }
+    pair IP(path p, path q, int i) { return intersectionpoints(p, q)[i]; }
+    path CR(pair O, pair A) { return circle(O, abs(O-A)); }
+  \end{asydef}
+\fi
+
+\ifalanhdr
+  \RequirePackage[headsepline]{scrlayer-scrpage}
+\fi
+
+\ifalanthm
+  \RequirePackage{amsthm}
+  \RequirePackage{thmtools}
+  \PassOptionsToPackage{svgnames,dvipsnames}{xcolor}
+  \RequirePackage{xcolor}
+  \RequirePackage[framemethod=TikZ]{mdframed}
+
+  \newcommand{\cleartheorem}[1]{
+    \expandafter\let\csname#1\endcsname\relax
+    \expandafter\let\csname c@#1\endcsname\relax
+  }
+
+  \mdfdefinestyle{mdbluebox}{
+    roundcorner=10pt,
+    linewidth=1pt,
+    skipabove=12pt,
+    innerbottommargin=9pt,
+    skipbelow=2pt,
+    linecolor=blue,
+    nobreak=true,
+    backgroundcolor=TealBlue!5,
+  }
+  \declaretheoremstyle[
+    headfont=\sffamily\bfseries\color{MidnightBlue},
+    mdframed={style=mdbluebox},
+    headpunct={\\[3pt]},
+    postheadspace={0pt},
+  ]{thmbluebox}
+  \mdfdefinestyle{mdredbox}{
+    linewidth=0.5pt,
+    skipabove=12pt,
+    frametitleaboveskip=5pt,
+    frametitlebelowskip=0pt,
+    skipbelow=2pt,
+    frametitlefont=\bfseries,
+    innertopmargin=4pt,
+    innerbottommargin=8pt,
+    nobreak=true,
+    backgroundcolor=Salmon!5,
+    linecolor=RawSienna,
+  }
+  \declaretheoremstyle[
+    headfont=\bfseries\color{RawSienna},
+    mdframed={style=mdredbox},
+    headpunct={\\[3pt]},
+    postheadspace=0pt,
+  ]{thmredbox}
+  \mdfdefinestyle{mdgreenbox}{
+    skipabove=8pt,
+    skipbelow=0pt,
+    linewidth=2pt,
+    rightline=false,
+    leftline=true,
+    topline=false,
+    bottomline=false,
+    linecolor=ForestGreen,
+    backgroundcolor=ForestGreen!5,
+  }
+  \declaretheoremstyle[
+    headfont=\bfseries\sffamily\color{ForestGreen!70!black},
+    bodyfont=\normalfont,
+    spaceabove=2pt,
+    spacebelow=1pt,
+    mdframed={style=mdgreenbox},
+    headpunct={ --- },
+  ]{thmgreenbox}
+  \mdfdefinestyle{mdblackbox}{
+    skipabove=8pt,
+    linewidth=3pt,
+    rightline=false,
+    leftline=true,
+    topline=false,
+    bottomline=false,
+    linecolor=black,
+    backgroundcolor=RedViolet!5!gray!5,
+  }
+  \declaretheoremstyle[
+    headfont=\bfseries,
+    bodyfont=\normalfont\small,
+    spaceabove=0pt,
+    spacebelow=0pt,
+    mdframed={style=mdblackbox},
+  ]{thmblackbox}
+
+  \declaretheorem[style=thmbluebox,name=Theorem]{theorem}
+  \declaretheorem[style=thmbluebox,name=Corollary,sibling=theorem]{corollary}
+  \declaretheorem[style=thmbluebox,name=Lemma,sibling=theorem]{lemma}
+  \declaretheorem[style=thmbluebox,name=Proposition,sibling=theorem]{proposition}
+
+  \declaretheorem[style=thmbluebox,name=Theorem,numbered=no]{theorem*}
+  \declaretheorem[style=thmbluebox,name=Corollary,numbered=no]{corollary*}
+  \declaretheorem[style=thmbluebox,name=Lemma,numbered=no]{lemma*}
+  \declaretheorem[style=thmbluebox,name=Proposition,numbered=no]{proposition*}
+
+  \declaretheorem[style=thmgreenbox,name=Algorithm,sibling=theorem]{algorithm}
+  \declaretheorem[style=thmgreenbox,name=Claim,sibling=theorem]{claim}
+  \declaretheorem[style=thmgreenbox,name=Algorithm,numbered=no]{algorithm*}
+  \declaretheorem[style=thmgreenbox,name=Claim,numbered=no]{claim*}
+
+  \declaretheorem[style=thmredbox,name=Example]{example}
+  \declaretheorem[style=thmredbox,name=Example,numbered=no]{example*}
+
+  \declaretheorem[style=thmblackbox,name=Remark,sibling=theorem]{remark}
+  \declaretheorem[style=thmblackbox,name=Remark,numbered=no]{remark*}
+
+  \declaretheoremstyle[
+    headfont=\color{blue!40!black}\normalfont\bfseries,
+    spaceabove=8pt,
+    spacebelow=8pt,
+    bodyfont=\normalfont
+  ]{basehead}
+
+  \declaretheorem[style=basehead,name=Conjecture,sibling=theorem]{conjecture}
+  \declaretheorem[style=basehead,name=Definition,sibling=theorem]{definition}
+  \declaretheorem[style=basehead,name=Exercise,sibling=theorem]{exercise}
+  \declaretheorem[style=basehead,name=Fact,sibling=theorem]{fact}
+  \declaretheorem[style=basehead,name=Problem,sibling=theorem]{problem}
+  \declaretheorem[style=basehead,name=Question,sibling=theorem]{ques}
+  \declaretheorem[style=basehead,name=Conjecture,numbered=no]{conjecture*}
+  \declaretheorem[style=basehead,name=Definition,numbered=no]{definition*}
+  \declaretheorem[style=basehead,name=Exercise,numbered=no]{exercise*}
+  \declaretheorem[style=basehead,name=Fact,numbered=no]{fact*}
+  \declaretheorem[style=basehead,name=Problem,numbered=no]{problem*}
+  \declaretheorem[style=basehead,name=Question,numbered=no]{ques*}
+\fi
