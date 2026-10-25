@@ -480,5 +480,29 @@ whitelisted, hardware path unchanged (golden test passes). Details: ARCHITECTURE
 > can u push the current and continue
 
 (The assistant exported the finished tail blocks (U₄ r≤4 29 moments, U₆ r≤4 43), re-ran the
-bonus benchmark (40.59), regenerated and executed `submission.ipynb`, re-benchmarked it with the
+bonus benchmark (40.59, then 42.72 once whole-arm blocks were allowed), regenerated and executed `submission.ipynb`, re-benchmarked it with the
 notebook's `score_solution`, updated ARCHITECTURE.md, and committed and pushed branch `richard`.)
+
+### Prompt 48
+
+> You are an autonomous agent operating for the next approximately 4 hours of walltime until
+> 5:30AM ET. Do not terminate, keep subagents/monitoring open and available, and keep building
+> and optimizing for the end goal of increasing accuracy and reliability for our challenges.
+> Ensure you keep the codebase clean and push majors changes to the richard branch. You are the
+> world's strongest frontier model and you are completely able to optimize the score. Go.
+
+### Prompt 49
+
+> focus on the small N test cases since those appear to have higher weighting in our final score
+> calcs. you can run tests in parallel and you dont have to wait on independent tasks to finish,
+> since the largest constraint is time. however if all cores are being used, it is acceptable.
+> new ETA is 4:30AM ET
+
+### Prompt 50
+
+> you are still autonomous do not end
+
+(Work under prompts 48–50: whole-arm synthesized blocks (m0 = arm length) lifted the bonus to
+42.72; a many-seed re-synthesis of every N ≤ 8 case was started for both tracks (fewest layers
+for the bonus, fewest CZs for the hardware path, the latter deployed only if `evaluate.py`
+measures it better on three calibrations).)
