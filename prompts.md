@@ -389,3 +389,49 @@ measure only the deployed angles, or parallelize the restarts.)
 (The assistant stopped the run and measured the deployed angles' coherent-error sensitivity
 (`vqe_coherent_8_3_cz31.csv`). It came out close to the old pick (λ 107 vs 86 uniform, 86 vs 112
 per-qubit), so the export was kept. It then regenerated the golden file and the notebook.)
+
+### Prompt 41 (plan mode; model: Claude Fable 5.1)
+
+> /plan I want to make a latex writeup documenting the important mathematical choices behind our
+> project submission. Create a plan on the most important ideas to write about and how to describe
+> them.
+
+Clarifying questions from the assistant, and Richard's answers:
+
+- *How long and for whom?* → "Appendix-style, ~3 pages".
+- *Include Bryan's building-block derivations?* → "Brief summary only".
+- *How to build the PDF (no LaTeX on the machine)?* → "Write .tex only, I compile in Overleaf
+  (Recommended)".
+
+Then: "Save the plan - I'll use it in a bit".
+
+### Prompt 42 (model: Claude Opus 5.5)
+
+> Execute from the plan file
+
+(The assistant wrote `docs/writeup/main.tex` and `refs.bib` and copied two existing figures. The
+document covers the score's heavy tail and the imbalance noncentrality, the complement and
+permutation reductions, the W tree, whole-state synthesis and the robust angle pick, B-E with
+synthesized SCS blocks, the placement cost read as log E[z], compilation, a summary of Bryan's
+constructions, a results table and negative results. It checked the closed forms against
+`scoring.expected_score`, checked the over-rotation versus phase-error orders on the deployed D4,2
+circuit, and traced every number in the document to ARCHITECTURE.md, a summarized CSV, or that
+check. No local LaTeX build was run.)
+
+### Prompt 43 (model: Claude Opus 5.5)
+
+> can you regenerate and benchmark the new submission.ipynb with its scoring functions for both
+> the base problem and the bonus question?
+
+(The assistant regenerated and executed the notebook with `make_notebook.py --run`. The output was
+byte-identical to the committed file, and every sanity case passed. It then wrote
+`experiments/bench_notebook.py`, which runs the notebook's own cells and scores with the
+notebook's own functions. Standard track: 25 cases (N ≤ 10) × calibration seeds 0–2, idle noise,
+1,000 sampled 10k-shot Z/X runs per case through the verbatim `overall_score`. All 75 builds were
+exact and valid, and the verbatim and fast scorers agreed to 1e-14 on identical shots.
+Σ median 27.64 and Σ E[score] 101.8 agree with ARCHITECTURE.md (27.9 / 102.0) within W₂
+sampling noise. The judged total (one run per case, summed) has median 36.4, p10–p90 26.3–142,
+and mean 100.8. Bonus: the notebook's `score_solution`, with a `validate_circuit` written from
+the bonus text (the notebook never defines one), gave 37.1542 over 56 cases. All were exact and
+routed, with no measurements, and the slowest build took 7.7 s. Results are in
+`notebook_standard.csv`, `notebook_standard_totals.csv` and `notebook_bonus.csv`.)

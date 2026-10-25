@@ -71,6 +71,8 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1   # parallel jobs: one BLAS thre
 
 # rebuild submission.ipynb from main.py and execute it
 .venv/bin/python experiments/make_notebook.py --run
+# score submission.ipynb with its own functions: overall_score (standard) and score_solution (bonus)
+.venv/bin/python experiments/bench_notebook.py --workers 28   # ~15 min, 1000 verbatim-scored runs per case
 ```
 
 Calibrations are the notebook's fake-data generators with fixed seeds (`experiments/calib.py`,
@@ -128,7 +130,9 @@ experiments/trajectory.py  quantum-trajectory evaluator for N >= 11
 experiments/mixed_moments.py  are mixed CZ + 1q moments where a gain comes from?
 experiments/compress.py warm-start CZ deletion (negative result, ARCHITECTURE section 6)
 experiments/make_notebook.py  main.py -> submission.ipynb
+experiments/bench_notebook.py submission.ipynb scored by its own overall_score / score_solution
 docs/                   Bryan's derivations of his building blocks
+docs/writeup/           LaTeX appendix on the mathematical choices (compile main.tex in Overleaf)
 experiments/results/    every CSV behind the slides
 tests/                  pytest suite
 prompts.md              every AI prompt used (sponsor requirement)
