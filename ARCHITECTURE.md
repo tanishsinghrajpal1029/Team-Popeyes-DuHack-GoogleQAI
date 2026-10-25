@@ -60,6 +60,10 @@ the (N, n) pairs again, so both views are kept.
 
 ## 2. Architecture (`main.py`)
 
+The deliverable is `submission.ipynb`: the challenge notebook with `main.py` embedded verbatim
+(`experiments/make_notebook.py --run` regenerates and executes it; `experiments/bench_notebook.py`
+scores it with the notebook's own functions). Everything below describes `main.py`.
+
 ```
 create_dicke_state(N, n, calibration)
  └─ build(..., w_tree, synth, scs, tiny, dd, bryan)   defaults = the submission
