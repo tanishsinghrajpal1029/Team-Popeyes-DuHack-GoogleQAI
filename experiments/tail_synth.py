@@ -29,7 +29,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from scs_synth import BatchCircuit, basis, solve  # noqa: E402
+from scs_synth import BatchCircuit, basis, fit, solve  # noqa: E402
 from synth import brickwork, shape_coords, shape_edges  # noqa: E402
 
 OUT = os.path.join(HERE, "results", "tail")
@@ -57,16 +57,26 @@ def verify(entry: dict) -> float:
     return float(min(np.abs(got - outs).max(), np.abs(got + outs).max()))
 
 
-def search(m0, rmax, shape="path", seed=0, max_layers=30, restarts=8, time_limit=600.0, log=print):
-    """Smallest brickwork layer count on `shape` whose angles reach the exact isometry."""
+def search(m0, rmax, shape="path", seed=0, max_layers=30, restarts=8, time_limit=600.0, log=print, lmin=1):
+    """Smallest brickwork layer count on `shape` whose angles reach the exact isometry.
+
+    A near miss (best infidelity below 1e-3 at some L) usually means that L is feasible, so it
+    gets a long warm-started polish and twice the random restarts before L is increased.
+    """
     rng = np.random.default_rng(seed)
     coords = shape_coords(shape, m0)
     edges = shape_edges(coords)
     ins, outs = tail_io(m0, rmax)
     t0 = time.time()
-    for L in range(1, max_layers + 1):
+    for L in range(max(1, lmin), max_layers + 1):
         layers = brickwork(edges, L)
         f, x = solve(m0, layers, ins, outs, rng, restarts)
+        if TOL <= f < 1e-3:  # near miss: polish, then more restarts at this depth
+            f, x = fit(BatchCircuit(m0, layers), ins, outs, x, maxiter=40000)
+            if f >= TOL:
+                f2, x2 = solve(m0, layers, ins, outs, rng, 2 * restarts)
+                if f2 < f:
+                    f, x = f2, x2
         log(f"  U_{m0} r<={rmax} {shape} s{seed} L={L} cz={sum(map(len, layers))} infid={f:.1e} ({time.time() - t0:.0f}s)")
         if f < TOL:
             return dict(
@@ -81,7 +91,7 @@ def search(m0, rmax, shape="path", seed=0, max_layers=30, restarts=8, time_limit
 
 
 def _job(args):
-    m0, rmax, shape, seed, time_limit, restarts = args
+    m0, rmax, shape, seed, time_limit, restarts, lmin = args
     os.makedirs(OUT, exist_ok=True)
     stem = os.path.join(OUT, f"U{m0}_r{rmax}_{shape}_s{seed}")
 
@@ -89,7 +99,7 @@ def _job(args):
         with open(stem + ".log", "a") as fh:
             fh.write(f"{time.strftime('%H:%M:%S')} {s}\n")
 
-    res = search(m0, rmax, shape, seed, time_limit=time_limit, restarts=restarts, log=log)
+    res = search(m0, rmax, shape, seed, time_limit=time_limit, restarts=restarts, log=log, lmin=lmin)
     if res is not None:
         with open(stem + ".json", "w") as fh:
             json.dump(res, fh)
@@ -148,12 +158,13 @@ def main_cli():
     ap.add_argument("--time-limit", type=float, default=600.0, help="seconds per (case, shape, seed)")
     ap.add_argument("--restarts", type=int, default=8)
     ap.add_argument("--workers", type=int, default=os.cpu_count())
+    ap.add_argument("--lmin", type=int, default=1, help="first layer count to try (skip hopeless shallow ones)")
     args = ap.parse_args()
     if args.export:
         export_table()
         return
     jobs = [
-        (int(c.split(",")[0]), int(c.split(",")[1]), s, seed, args.time_limit, args.restarts)
+        (int(c.split(",")[0]), int(c.split(",")[1]), s, seed, args.time_limit, args.restarts, args.lmin)
         for c in args.cases for s in args.shapes for seed in args.seeds
     ]
     with Pool(min(args.workers, len(jobs))) as pool:
